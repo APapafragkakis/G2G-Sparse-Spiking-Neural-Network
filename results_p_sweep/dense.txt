@@ -1,27 +1,26 @@
 Selected model: dense
-Epoch 01 | test_acc=0.8283
-Epoch 02 | test_acc=0.8497
-Epoch 03 | test_acc=0.8455
-Epoch 04 | test_acc=0.8508
-Epoch 05 | test_acc=0.8501
-Epoch 06 | test_acc=0.8590
-Epoch 07 | test_acc=0.8584
-Epoch 08 | test_acc=0.8517
-Epoch 09 | test_acc=0.8558
-Epoch 10 | test_acc=0.8668
-Epoch 11 | test_acc=0.8716
-Epoch 12 | test_acc=0.8566
-Epoch 13 | test_acc=0.8685
-Epoch 14 | test_acc=0.8730
-Epoch 15 | test_acc=0.8675
-Epoch 16 | test_acc=0.8542
-Epoch 17 | test_acc=0.8705
-Epoch 18 | test_acc=0.8673
-Epoch 19 | test_acc=0.8725
-Epoch 20 | test_acc=0.8743
+Epoch 01 | test_acc=0.8330
+Epoch 02 | test_acc=0.8507
+Epoch 03 | test_acc=0.8458
+Epoch 04 | test_acc=0.8558
+Epoch 05 | test_acc=0.8609
+Epoch 06 | test_acc=0.8608
+Epoch 07 | test_acc=0.8505
+Epoch 08 | test_acc=0.8573
+Epoch 09 | test_acc=0.8699
+Epoch 10 | test_acc=0.8560
+Epoch 11 | test_acc=0.8680
+Epoch 12 | test_acc=0.8669
+Epoch 13 | test_acc=0.8520
+Epoch 14 | test_acc=0.8675
+Epoch 15 | test_acc=0.8697
+Epoch 16 | test_acc=0.8656
+Epoch 17 | test_acc=0.8695
+Epoch 18 | test_acc=0.8640
+Epoch 19 | test_acc=0.8692
+Epoch 20 | test_acc=0.8704
 Average firing rates (test set):
-  Layer 1 mean rate:        0.036219
-  Layer 2 mean rate:        0.005384
-  Layer 3 mean rate:        0.004439
-  Overall hidden mean rate: 0.015347
-  
+  Layer 1 mean rate:        0.056217
+  Layer 2 mean rate:        0.012070
+  Layer 3 mean rate:        0.009162
+  Overall hidden mean rate: 0.025816
