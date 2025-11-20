@@ -1,0 +1,26 @@
+Selected model: mixer
+Epoch 01 | test_acc=0.8380
+Epoch 02 | test_acc=0.8482
+Epoch 03 | test_acc=0.8555
+Epoch 04 | test_acc=0.8692
+Epoch 05 | test_acc=0.8519
+Epoch 06 | test_acc=0.8616
+Epoch 07 | test_acc=0.8509
+Epoch 08 | test_acc=0.8738
+Epoch 09 | test_acc=0.8750
+Epoch 10 | test_acc=0.8845
+Epoch 11 | test_acc=0.8687
+Epoch 12 | test_acc=0.8830
+Epoch 13 | test_acc=0.8746
+Epoch 14 | test_acc=0.8798
+Epoch 15 | test_acc=0.8853
+Epoch 16 | test_acc=0.8778
+Epoch 17 | test_acc=0.8872
+Epoch 18 | test_acc=0.8814
+Epoch 19 | test_acc=0.8812
+Epoch 20 | test_acc=0.8913
+Average firing rates (test set):
+  Layer 1 mean rate:        0.029726
+  Layer 2 mean rate:        0.010987
+  Layer 3 mean rate:        0.004745
+  Overall hidden mean rate: 0.015153

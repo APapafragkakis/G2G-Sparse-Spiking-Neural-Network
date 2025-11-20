@@ -1,0 +1,26 @@
+Selected model: index
+Epoch 01 | test_acc=0.8281
+Epoch 02 | test_acc=0.8650
+Epoch 03 | test_acc=0.8715
+Epoch 04 | test_acc=0.8802
+Epoch 05 | test_acc=0.8750
+Epoch 06 | test_acc=0.8576
+Epoch 07 | test_acc=0.8721
+Epoch 08 | test_acc=0.8729
+Epoch 09 | test_acc=0.8810
+Epoch 10 | test_acc=0.8816
+Epoch 11 | test_acc=0.8837
+Epoch 12 | test_acc=0.8853
+Epoch 13 | test_acc=0.8875
+Epoch 14 | test_acc=0.8903
+Epoch 15 | test_acc=0.8773
+Epoch 16 | test_acc=0.8807
+Epoch 17 | test_acc=0.8844
+Epoch 18 | test_acc=0.8906
+Epoch 19 | test_acc=0.8920
+Epoch 20 | test_acc=0.8801
+Average firing rates (test set):
+  Layer 1 mean rate:        0.040274
+  Layer 2 mean rate:        0.014128
+  Layer 3 mean rate:        0.005189
+  Overall hidden mean rate: 0.019864
