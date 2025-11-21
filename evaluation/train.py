@@ -33,12 +33,20 @@ except ImportError:
 
 
 def select_device():
+    if has_dml:
+        device = torch_directml.device()
+        print(f"Using device: {device}")
+        return device
+
     if torch.cuda.is_available():
-        return torch.device("cuda")
-    elif has_dml:
-        return torch_directml.device()
-    else:
-        raise RuntimeError("No GPU backend available")
+        device = torch.device("cuda")
+        print(f"Using device: {device}")
+        return device
+    
+    device = torch.device("cpu")
+    print("Warning: No GPU backend available, falling back to CPU.")
+    return device
+
 
 
 # Hyperparameters (shared across models)
