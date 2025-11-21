@@ -51,9 +51,6 @@ def select_device():
     print("No GPU backend available — using CPU.")
     return device
 
-
-
-
 # Hyperparameters (shared across models)
 batch_size = 256
 T = 50
