@@ -1,11 +1,13 @@
 # G2G_Sparse_SNN
 
-Spiking Neural Network implementations on Fashion-MNIST with different connectivity patterns:
+Spiking Neural Network implementations on Fashion-MNIST exploring different connectivity patterns inspired by biological neural circuits:
 
-- **Dense**: standard fully-connected baseline
-- **Index**: group-based sparse connectivity (G2G approach)
-- **Random**: randomly sparse connections
-- **Mixer**: mixer-based sparse connectivity with intra/inter-group structure
+- **Dense**: fully-connected baseline for comparison
+- **Index**: G2GNet with index-based grouping (preserves spatial locality)
+- **Random**: G2GNet with random grouping (disrupts spatial structure)
+- **Mixer**: G2GNet with mixer-based grouping (alternates between spatial and feature mixing)
+
+G2GNet is our proposed architecture that uses sparse, modular connectivity inspired by ensemble-to-ensemble communication observed in mouse visual cortex. The three grouping strategies (Index, Random, Mixer) represent different ways to organize neurons within each layer.
 
 You can train these models normally or run k-fold cross-validation on the Fashion-MNIST training set.
 
@@ -66,29 +68,29 @@ where X is one of: `dense`, `index`, `random`, `mixer`
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--model` | Model type: dense, index, random, mixer | required |
-| `--p_inter` | Inter-group probability for sparse models | 0.15 |
+| `--p_inter` | Inter-group connection probability (for G2GNet variants) | 0.15 |
 | `--epochs` | Training epochs | 20 |
 
-Note: `p_inter` only matters for sparse models (index, random, mixer) - it's ignored for dense.
+Note: `p_inter` only applies to sparse models (index, random, mixer) - it controls how likely neurons from different groups are to connect.
 
 ### Examples
 
-Train index-based sparse model:
+Train G2GNet with index-based grouping:
 ```bash
 python evaluation/train.py --model index
 ```
 
-Train mixer with higher inter-group connectivity:
+Train G2GNet with mixer grouping and higher inter-group connectivity:
 ```bash
 python evaluation/train.py --model mixer --p_inter 0.20
 ```
 
-Train random sparse model with more epochs:
+Train G2GNet with random grouping, more epochs, and lower inter-group connectivity:
 ```bash
 python evaluation/train.py --model random --epochs 30 --p_inter 0.10
 ```
 
-Dense baseline:
+Train dense baseline:
 ```bash
 python evaluation/train.py --model dense --epochs 20
 ```
@@ -114,23 +116,23 @@ python evaluation/crossval.py --model X [--p_inter P] [--epochs N] [--k_folds K]
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--model` | Model type | dense |
-| `--p_inter` | Inter-group probability (sparse models only) | 0.15 |
+| `--p_inter` | Inter-group probability (G2GNet variants only) | 0.15 |
 | `--epochs` | Epochs per fold | 5 |
 | `--k_folds` | Number of folds | 5 |
 
 ### Examples
 
-5-fold CV for dense model:
+5-fold CV for dense baseline:
 ```bash
 python evaluation/crossval.py --model dense --epochs 5 --k_folds 5
 ```
 
-5-fold CV for index model:
+5-fold CV for G2GNet with index grouping:
 ```bash
 python evaluation/crossval.py --model index --p_inter 0.15 --epochs 5 --k_folds 5
 ```
 
-Compare different inter-group probabilities:
+Compare different inter-group probabilities with mixer:
 ```bash
 python evaluation/crossval.py --model mixer --p_inter 0.20 --epochs 10 --k_folds 5
 ```
@@ -154,3 +156,12 @@ Everything runs on Fashion-MNIST:
 - 10 classes (T-shirt, trouser, pullover, dress, coat, sandal, shirt, sneaker, bag, ankle boot)
 
 We use the training set for both standard training and k-fold cross-validation.
+
+## About G2GNet
+
+G2GNet is inspired by functional connectivity patterns observed in mouse primary visual cortex. Instead of fully connecting all neurons between layers, it organizes neurons into groups that preferentially communicate with their corresponding groups in adjacent layers. This creates sparse "pathways" through the network while still allowing limited cross-pathway communication via the `p_inter` parameter.
+
+The three grouping strategies offer different trade-offs:
+- **Index**: maintains spatial locality from input patches
+- **Random**: breaks spatial structure, often underperforms
+- **Mixer**: alternates between spatial and feature-wise grouping (generally performs best)
