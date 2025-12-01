@@ -2,6 +2,11 @@ import os
 import sys
 import argparse
 
+# Ensure project root is on sys.path so that "models", "data", etc. can be imported
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
 import torch
 from torch import nn
 
@@ -18,16 +23,7 @@ warnings.filterwarnings(
     message=".*aten::lerp.Scalar_out.*"
 )
 
-# --------------------------------------------------------------------------
-# Path setup so that imports work when running from evaluation/train.py
-# --------------------------------------------------------------------------
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT_DIR not in sys.path:
-    sys.path.append(ROOT_DIR)
-
-# --------------------------------------------------------------------------
 # Device selection (CUDA / DirectML / CPU)
-# --------------------------------------------------------------------------
 try:
     import torch_directml
     has_dml = True
@@ -54,9 +50,7 @@ def select_device():
     return device
 
 
-# --------------------------------------------------------------------------
 # Hyperparameters (shared across models)
-# --------------------------------------------------------------------------
 batch_size = 256
 T = 50
 input_dim = 28 * 28
@@ -72,9 +66,6 @@ global_step = 0
 UPDATE_INTERVAL = 1000   # number of training steps between DST updates
 
 
-# --------------------------------------------------------------------------
-# Model builder
-# --------------------------------------------------------------------------
 def build_model(model_name: str, p_inter: float):
     """Construct and return the selected model."""
     if model_name == "dense":
@@ -113,9 +104,6 @@ def build_model(model_name: str, p_inter: float):
     raise ValueError(f"Unknown model type: {model_name}")
 
 
-# --------------------------------------------------------------------------
-# DST utilities (magnitude prune + random grow), respecting static mask
-# --------------------------------------------------------------------------
 def dst_update_layer_magnitude_random(layer: MixerSparseLinear, prune_frac: float):
     """
     Apply a DST update to a single MixerSparseLinear layer.
@@ -179,9 +167,6 @@ def dst_step(model: nn.Module, prune_frac: float = 0.025):
             dst_update_layer_magnitude_random(module, prune_frac)
 
 
-# --------------------------------------------------------------------------
-# Training / evaluation
-# --------------------------------------------------------------------------
 def train_one_epoch(model, loader, optimizer, device, epoch_idx: int, use_dst: bool):
     """
     Train the model for one epoch over the given DataLoader.
@@ -291,9 +276,6 @@ def compute_firing_rates(model, loader, device):
     return rates
 
 
-# --------------------------------------------------------------------------
-# Argument parsing
-# --------------------------------------------------------------------------
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -336,9 +318,6 @@ def parse_args():
     return parser.parse_args()
 
 
-# --------------------------------------------------------------------------
-# Main
-# --------------------------------------------------------------------------
 def main():
     args = parse_args()
     device = select_device()
@@ -347,7 +326,6 @@ def main():
     print(f"Sparsity mode: {args.sparsity_mode}")
 
     train_loader, test_loader = get_fashion_loaders(batch_size)
-
     model = build_model(args.model, p_inter=args.p_inter).to(device)
 
     optimizer = torch.optim.Adam(
