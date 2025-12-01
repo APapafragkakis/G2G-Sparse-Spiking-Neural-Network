@@ -2,19 +2,13 @@ import os
 import sys
 import argparse
 
-# Allow imports from project root
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT_DIR not in sys.path:
-    sys.path.append(ROOT_DIR)
-
 import torch
 from torch import nn
 
 from models.dense_snn import DenseSNN
 from models.index_snn import IndexSNN
 from models.random_snn import RandomSNN
-from models.mixer_snn import MixerSNN
-from models.mixer_snn import MixerSparseLinear
+from models.mixer_snn import MixerSNN, MixerSparseLinear
 from data.data_fashionmnist import get_fashion_loaders
 from utils.encoding import rate_encode
 
@@ -24,53 +18,69 @@ warnings.filterwarnings(
     message=".*aten::lerp.Scalar_out.*"
 )
 
+# --------------------------------------------------------------------------
+# Path setup so that imports work when running from evaluation/train.py
+# --------------------------------------------------------------------------
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 
-# Try DirectML for AMD or CUDA for NVIDIA GPUs
+# --------------------------------------------------------------------------
+# Device selection (CUDA / DirectML / CPU)
+# --------------------------------------------------------------------------
 try:
     import torch_directml
     has_dml = True
 except ImportError:
     has_dml = False
 
+
 def select_device():
-    # If DirectML (for AMD GPUs)
+    """Select compute device (DirectML, CUDA, or CPU)."""
     if has_dml:
         device = torch_directml.device()
         print(f"Using DirectML device: {device}")
         return device
 
-    # If NVIDIA GPU is available 
     if torch.cuda.is_available():
         device = torch.device("cuda")
         gpu_name = torch.cuda.get_device_name(0)
-        cuda_version = torch.version.cuda  
+        cuda_version = torch.version.cuda
         print(f"Using GPU: {gpu_name} | CUDA version: {cuda_version}")
         return device
-    
-    # Fallback to CPU
+
     device = torch.device("cpu")
     print("No GPU backend available — using CPU.")
     return device
 
+
+# --------------------------------------------------------------------------
 # Hyperparameters (shared across models)
+# --------------------------------------------------------------------------
 batch_size = 256
 T = 50
 input_dim = 28 * 28
 hidden_dim = 1024
-# Dense equal-parameter baseline (≈ same number of params as sparse with 1024 units)
+# Dense baseline with approximately the same number of parameters
 hidden_dim_dense = 447
 num_classes = 10
-num_epochs = 20   
+num_epochs = 20
 lr = 1e-3
 
+# Global state for Dynamic Sparse Training (DST)
+global_step = 0
+UPDATE_INTERVAL = 1000   # number of training steps between DST updates
 
+
+# --------------------------------------------------------------------------
+# Model builder
+# --------------------------------------------------------------------------
 def build_model(model_name: str, p_inter: float):
-    """Return the model specified by its name."""
+    """Construct and return the selected model."""
     if model_name == "dense":
-        # Fully-connected baseline (no p_inter used)
         return DenseSNN(input_dim, hidden_dim_dense, num_classes)
+
     elif model_name == "index":
-        # Index-based sparse SNN
         return IndexSNN(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
@@ -79,8 +89,8 @@ def build_model(model_name: str, p_inter: float):
             p_intra=1.0,
             p_inter=p_inter,
         )
+
     elif model_name == "random":
-        # Random-group sparse SNN
         return RandomSNN(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
@@ -89,8 +99,8 @@ def build_model(model_name: str, p_inter: float):
             p_intra=1.0,
             p_inter=p_inter,
         )
+
     elif model_name == "mixer":
-        # Mixer-group sparse SNN
         return MixerSNN(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
@@ -99,18 +109,36 @@ def build_model(model_name: str, p_inter: float):
             p_intra=1.0,
             p_inter=p_inter,
         )
-    else:
-        raise ValueError(f"Unknown model type: {model_name}")
+
+    raise ValueError(f"Unknown model type: {model_name}")
 
 
-def dst_update_layer_magnitude_random(layer, prune_frac: float):
-    
+# --------------------------------------------------------------------------
+# DST utilities (magnitude prune + random grow), respecting static mask
+# --------------------------------------------------------------------------
+def dst_update_layer_magnitude_random(layer: MixerSparseLinear, prune_frac: float):
+    """
+    Apply a DST update to a single MixerSparseLinear layer.
+
+    - Prune: remove weights with the smallest absolute value |w|
+    - Grow: add the same number of new connections at random
+    - Respect layer.mask_static: static connections are never modified
+    """
     weight = layer.weight.data
-    mask = layer.mask  # buffer, same shape as weight
+    mask = layer.mask  # current binary mask (0/1)
 
-    # Active / inactive connections
-    active = mask.bool()
-    inactive = ~active
+    # Use static_mask if available; those connections are protected
+    static_mask = getattr(layer, "mask_static", None)
+    if static_mask is not None:
+        static_mask = static_mask.bool()
+        non_static = ~static_mask
+    else:
+        # If no static mask exists, treat all positions as non-static
+        non_static = torch.ones_like(mask, dtype=torch.bool)
+
+    # Only non-static positions are eligible for DST
+    active = mask.bool() & non_static
+    inactive = (~mask.bool()) & non_static
 
     num_active = active.sum().item()
     if num_active == 0:
@@ -120,74 +148,69 @@ def dst_update_layer_magnitude_random(layer, prune_frac: float):
     if num_prune < 1:
         return
 
-    # Prune: smallest |w| among active
+    # Prune: smallest |w| among active & non-static positions
     active_weights = weight[active].abs()
-    # find threshold for the num_prune smallest
     thresh, _ = torch.kthvalue(active_weights, num_prune)
     prune_mask = active & (weight.abs() <= thresh)
-
-    # Deactivate these connections
     mask[prune_mask] = 0
 
-    # Grow: random growth among inactive
-    inactive = ~mask.bool()
+    # Grow: random new connections in inactive & non-static positions
+    inactive = (~mask.bool()) & non_static
     num_inactive = inactive.sum().item()
     num_grow = min(num_prune, num_inactive)
     if num_grow < 1:
         return
 
-    # Get indices of inactive connections
     inactive_idx = inactive.nonzero(as_tuple=False)  # [N_inactive, 2]
     perm = torch.randperm(num_inactive, device=weight.device)[:num_grow]
     grow_idx = inactive_idx[perm]
-
-    # Activate these new connections
     mask[grow_idx[:, 0], grow_idx[:, 1]] = 1
 
-    # Optional: clear inactive weights (cleanliness)
+    # Clear weights of inactive connections for numerical cleanliness
     weight[~mask.bool()] = 0.0
 
-def dst_step(model, prune_frac=0.025):
+
+def dst_step(model: nn.Module, prune_frac: float = 0.025):
     """
-    Apply DST to ALL MixerSparseLinear layers of the model.
+    Apply a DST update to all MixerSparseLinear layers in the model.
     """
-    print("[DST] Performing dynamic sparse update...")
     for module in model.modules():
         if isinstance(module, MixerSparseLinear):
-            print(f"[DST] step at global_step = {global_step}")
             dst_update_layer_magnitude_random(module, prune_frac)
 
-global_step = 0
-UPDATE_INTERVAL = 100 
 
-def train_one_epoch(model, loader, optimizer, device, epoch_idx: int):
+# --------------------------------------------------------------------------
+# Training / evaluation
+# --------------------------------------------------------------------------
+def train_one_epoch(model, loader, optimizer, device, epoch_idx: int, use_dst: bool):
+    """
+    Train the model for one epoch over the given DataLoader.
+    Optionally apply DST on MixerSNN layers if use_dst is True.
+    """
     global global_step
     model.train()
     total = 0
     correct = 0
 
     for batch_idx, (images, labels) in enumerate(loader):
-        # Move labels to device (images stay on CPU for encoding)
         labels = labels.to(device, non_blocking=True)
 
-        # Convert images to spike trains over T time steps
+        # Rate encoding from images to spike trains
         spikes = rate_encode(images, T).to(device)   # [T, B, 784]
 
-        # Forward + backward pass
         optimizer.zero_grad()
-        spk_counts = model(spikes)        # [B, num_classes]
+        spk_counts = model(spikes)                  # [B, num_classes]
         loss = nn.CrossEntropyLoss()(spk_counts, labels)
         loss.backward()
         optimizer.step()
 
-        # Dynamic Sparse Training step for MixerSNN 
-        if isinstance(model, MixerSNN):
+        # Dynamic Sparse Training step (only in dynamic mode and for MixerSNN)
+        if use_dst and isinstance(model, MixerSNN):
             if global_step > 0 and global_step % UPDATE_INTERVAL == 0:
                 dst_step(model, prune_frac=0.025)
 
         global_step += 1
 
-        # Predictions based on spike counts
         preds = spk_counts.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += labels.size(0)
@@ -198,19 +221,16 @@ def train_one_epoch(model, loader, optimizer, device, epoch_idx: int):
 
 @torch.no_grad()
 def evaluate(model, loader, device):
+    """Evaluate the model on a dataset and return accuracy."""
     model.eval()
     total = 0
     correct = 0
 
     for batch_idx, (images, labels) in enumerate(loader):
-        # Move labels to device
         labels = labels.to(device, non_blocking=True)
-
-        # Convert images to spike trains over T time steps
         spikes = rate_encode(images, T).to(device)
         spk_counts = model(spikes)
 
-        # Compute accuracy
         preds = spk_counts.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += labels.size(0)
@@ -221,11 +241,12 @@ def evaluate(model, loader, device):
 
 @torch.no_grad()
 def compute_firing_rates(model, loader, device):
-    """Compute mean firing rates per hidden layer and overall (hidden layers only)."""
+    """
+    Compute mean firing rates per hidden layer and overall (hidden layers only).
+    """
     model.eval()
 
     total_samples = 0
-
     l1_sum = None
     l2_sum = None
     l3_sum = None
@@ -234,13 +255,10 @@ def compute_firing_rates(model, loader, device):
         B = images.size(0)
         total_samples += B
 
-        # Encode on CPU, then move spikes to device
         spikes = rate_encode(images, T).to(device)
-
-        # Forward pass with hidden spikes
         spk_out_sum, hidden_spikes = model(spikes, return_hidden_spikes=True)
 
-        # hidden_spikes["layerX"]: [B, hidden_dim]  (sum of spikes over time)
+        # hidden_spikes["layerX"]: [B, hidden_dim] (sum of spikes over time)
         batch_l1 = hidden_spikes["layer1"].sum(dim=0)  # [hidden_dim]
         batch_l2 = hidden_spikes["layer2"].sum(dim=0)
         batch_l3 = hidden_spikes["layer3"].sum(dim=0)
@@ -254,13 +272,11 @@ def compute_firing_rates(model, loader, device):
             l2_sum += batch_l2
             l3_sum += batch_l3
 
-    # Normalize by total time steps * total samples
     denom = T * total_samples
     l1_rate_per_neuron = l1_sum / denom
     l2_rate_per_neuron = l2_sum / denom
     l3_rate_per_neuron = l3_sum / denom
 
-    # Overall means (hidden only)
     hidden_concat = torch.cat(
         [l1_rate_per_neuron, l2_rate_per_neuron, l3_rate_per_neuron]
     )
@@ -275,22 +291,23 @@ def compute_firing_rates(model, loader, device):
     return rates
 
 
+# --------------------------------------------------------------------------
+# Argument parsing
+# --------------------------------------------------------------------------
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="Train SNN on Fashion-MNIST with different connectivity patterns."
     )
 
-    # Select which model to train
     parser.add_argument(
         "--model",
         type=str,
         default="dense",
         choices=["dense", "index", "random", "mixer"],
-        help="Select model type.",
+        help="Model type.",
     )
 
-    # Set number of training epochs
     parser.add_argument(
         "--epochs",
         type=int,
@@ -298,47 +315,54 @@ def parse_args():
         help="Number of training epochs.",
     )
 
-    # Inter-group probability p' for sparse models
     parser.add_argument(
         "--p_inter",
         type=float,
         default=0.15,
-        help="Inter-group connection probability p' for sparse models (Index, Random, Mixer). "
-             "Ignored for the dense model.",
+        help="Inter-group connection probability p' for sparse models "
+             "(Index, Random, Mixer). Ignored for the dense model.",
+    )
+
+    parser.add_argument(
+        "--sparsity_mode",
+        type=str,
+        default="static",
+        choices=["static", "dynamic"],
+        help="Sparsity mode for sparse models: "
+             "'static' = only initial structured sparsity, "
+             "'dynamic' = apply Dynamic Sparse Training (DST) on non-static connections.",
     )
 
     return parser.parse_args()
 
 
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
 def main():
     args = parse_args()
     device = select_device()
 
     print(f"Selected model: {args.model}")
+    print(f"Sparsity mode: {args.sparsity_mode}")
 
-    # DataLoaders
     train_loader, test_loader = get_fashion_loaders(batch_size)
 
-    # Build model
     model = build_model(args.model, p_inter=args.p_inter).to(device)
 
-    # Optimizer: Adam
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=lr,
         weight_decay=1e-4,
     )
 
-    # Training loop
-    for epoch in range(1, args.epochs + 1):
-        # Train for one epoch 
-        train_one_epoch(model, train_loader, optimizer, device, epoch)
+    use_dst = (args.sparsity_mode == "dynamic")
 
-        # Evaluate on the test set
+    for epoch in range(1, args.epochs + 1):
+        train_one_epoch(model, train_loader, optimizer, device, epoch, use_dst=use_dst)
         test_acc = evaluate(model, test_loader, device)
         print(f"Epoch {epoch:02d} | test_acc={test_acc:.4f}")
 
-    # ---- Firing rate analysis after training ----
     rates = compute_firing_rates(model, test_loader, device)
     print("Average firing rates (test set):")
     print(f"  Layer 1 mean rate:        {rates['layer1_mean']:.6f}")
