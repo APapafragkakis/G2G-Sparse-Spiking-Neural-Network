@@ -63,7 +63,7 @@ lr = 1e-3
 
 # Global state for Dynamic Sparse Training (DST)
 global_step = 0
-UPDATE_INTERVAL = 1000   # number of training steps between DST updates
+UPDATE_INTERVAL = 100   # number of training steps between DST updates
 
 
 def build_model(model_name: str, p_inter: float):
@@ -165,6 +165,7 @@ def dst_step(model: nn.Module, prune_frac: float = 0.025):
     for module in model.modules():
         if isinstance(module, MixerSparseLinear):
             dst_update_layer_magnitude_random(module, prune_frac)
+    print("[DST] step executed")
 
 
 def train_one_epoch(model, loader, optimizer, device, epoch_idx: int, use_dst: bool):
