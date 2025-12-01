@@ -154,6 +154,7 @@ def dst_step(model, prune_frac=0.025):
     print("[DST] Performing dynamic sparse update...")
     for module in model.modules():
         if isinstance(module, MixerSparseLinear):
+            print(f"[DST] step at global_step = {global_step}")
             dst_update_layer_magnitude_random(module, prune_frac)
 
 global_step = 0
