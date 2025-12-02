@@ -15,3 +15,4 @@ for %%C in (set random hebb) do (
     echo.
   )
 )
+  
