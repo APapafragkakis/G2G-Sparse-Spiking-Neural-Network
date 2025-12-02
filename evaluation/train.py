@@ -67,11 +67,10 @@ global_step = 0
 UPDATE_INTERVAL = 1000
 
 # Modes for pruning (C_P) and growth (C_G)
-# cp_mode: "set", "random", "hebb", "three"
+# cp_mode: "set", "random", "hebb"
 #   "set"    -> magnitude-based pruning
 #   "random" -> random pruning
 #   "hebb"   -> Hebbian (CH-based) pruning
-#   "three"  -> SET + Random + Hebbian in sequence (hybrid)
 # cg_mode: "hebb", "random"
 cp_mode = "set"
 cg_mode = "hebb"
@@ -219,114 +218,6 @@ def _grow_connections(
     return mask_cpu, n_eff
 
 
-def dst_update_layer_three_prune_hebb_growth(
-    layer: MixerSparseLinear,
-    layer_name: str,
-    prune_frac: float,
-    cg_mode_local: str,
-):
-    """
-    Hybrid DST update for a MixerSparseLinear layer.
-
-    Pruning (three criteria in sequence on active edges):
-        1) SET    (magnitude-based)
-        2) Random
-        3) Hebbian (smallest CH(i,j))
-
-    Growth:
-        Hebbian (CH-based) or Random on inactive edges.
-    """
-    global hebb_buffer
-
-    buf = hebb_buffer.get(layer_name, None)
-    if buf is None or "pre" not in buf or "post" not in buf:
-        return
-
-    pre_batch = buf["pre"]   # [T, B, N_in]
-    post_batch = buf["post"] # [T, B, N_out]
-
-    if pre_batch.shape[-1] != layer.in_features or post_batch.shape[-1] != layer.out_features:
-        return
-
-    # Cosine similarity on CPU
-    ch_cpu = compute_ch_matrix(pre_batch, post_batch)  # [out_features, in_features]
-
-    weight = layer.weight.data
-    mask = layer.mask
-    device = weight.device
-
-    mask_cpu = mask.detach().cpu()
-    w_cpu = weight.detach().cpu()
-
-    active_cpu = mask_cpu.bool()
-    num_active = active_cpu.sum().item()
-    if num_active == 0:
-        return
-
-    total_to_prune = int(prune_frac * num_active)
-    if total_to_prune < 1:
-        return
-
-    # Split pruning budget into three parts
-    base = total_to_prune // 3
-    n_set = base
-    n_rand = base
-    n_hebb = total_to_prune - n_set - n_rand
-
-    total_pruned = 0
-
-    # 1) SET (magnitude-based pruning)
-    active_cpu = mask_cpu.bool()
-    if n_set > 0 and active_cpu.sum().item() > 0:
-        active_weights = w_cpu[active_cpu].abs()
-        n_set_eff = min(n_set, active_weights.numel())
-        if n_set_eff > 0:
-            thresh, _ = torch.kthvalue(active_weights, n_set_eff)
-            prune_mask_set = active_cpu & (w_cpu.abs() <= thresh)
-            num_pruned_set = prune_mask_set.sum().item()
-            mask_cpu[prune_mask_set] = 0
-            total_pruned += num_pruned_set
-
-    # 2) Random pruning
-    active_cpu = mask_cpu.bool()
-    if n_rand > 0 and active_cpu.sum().item() > 0:
-        active_idx = active_cpu.nonzero(as_tuple=False)  # [N_active, 2]
-        n_rand_eff = min(n_rand, active_idx.size(0))
-        if n_rand_eff > 0:
-            perm = torch.randperm(active_idx.size(0))[:n_rand_eff]
-            rand_idx = active_idx[perm]
-            mask_cpu[rand_idx[:, 0], rand_idx[:, 1]] = 0
-            total_pruned += n_rand_eff
-
-    # 3) Hebbian pruning (lowest CH among active)
-    active_cpu = mask_cpu.bool()
-    if n_hebb > 0 and active_cpu.sum().item() > 0:
-        active_scores = ch_cpu[active_cpu]
-        n_hebb_eff = min(n_hebb, active_scores.numel())
-        if n_hebb_eff > 0:
-            thresh_hebb, _ = torch.kthvalue(active_scores, n_hebb_eff)
-            prune_mask_hebb = active_cpu & (ch_cpu <= thresh_hebb)
-            num_pruned_hebb = prune_mask_hebb.sum().item()
-            mask_cpu[prune_mask_hebb] = 0
-            total_pruned += num_pruned_hebb
-
-    # Growth step
-    if total_pruned <= 0:
-        mask.copy_(mask_cpu.to(device))
-        weight[~mask.bool()] = 0.0
-        return
-
-    mask_cpu, _ = _grow_connections(
-        mask_cpu,
-        ch_cpu,
-        total_pruned,
-        cg_mode_local,
-    )
-
-    mask.copy_(mask_cpu.to(device))
-    weight[~mask.bool()] = 0.0
-
-
 def dst_update_layer_cp_cg_single(
     layer: MixerSparseLinear,
     layer_name: str,
@@ -436,9 +327,8 @@ def dst_step(model: nn.Module, prune_frac: float = 0.025):
     """
     Apply one DST update step to all MixerSparseLinear layers.
 
-    Modes:
-        cp_mode in {"set", "random", "hebb"} -> single CP/CG rule.
-        cp_mode == "three"                  -> SET + Random + Hebbian hybrid.
+    In this implementation, a single pruning rule (cp_mode) and a single
+    growth rule (cg_mode) are used per run.
     """
     for name, module in model.named_modules():
         if not isinstance(module, MixerSparseLinear):
@@ -448,30 +338,14 @@ def dst_step(model: nn.Module, prune_frac: float = 0.025):
         if short_name not in hebb_buffer:
             continue
 
-        if cp_mode in ["set", "random", "hebb"]:
-            dst_update_layer_cp_cg_single(
-                module,
-                short_name,
-                prune_frac,
-                cp_mode,
-                cg_mode,
-            )
-        elif cp_mode == "three":
-            dst_update_layer_three_prune_hebb_growth(
-                module,
-                short_name,
-                prune_frac,
-                cg_mode,
-            )
-        else:
-            # Fallback: treat as single-rule SET pruning
-            dst_update_layer_cp_cg_single(
-                module,
-                short_name,
-                prune_frac,
-                "set",
-                cg_mode,
-            )
+        # Always use the single-rule CP/CG updater
+        dst_update_layer_cp_cg_single(
+            module,
+            short_name,
+            prune_frac,
+            cp_mode,
+            cg_mode,
+        )
 
     print("[DST] step executed")
 
@@ -644,13 +518,12 @@ def parse_args():
         "--cp",
         type=str,
         default="set",
-        choices=["set", "random", "hebb", "three"],
+        choices=["set", "random", "hebb"],
         help=(
             "Pruning criterion C_P: "
             "'set'    = magnitude-based pruning, "
             "'random' = random pruning, "
-            "'hebb'   = Hebbian pruning (CH-based), "
-            "'three'  = SET + Random + Hebbian in sequence."
+            "'hebb'   = Hebbian pruning (CH-based)."
         ),
     )
 
