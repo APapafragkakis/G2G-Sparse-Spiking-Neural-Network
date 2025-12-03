@@ -1,10 +1,9 @@
 @echo off
-setlocal enabledelayedexpansion
 
 set OUTDIR=results_mixer_dst_full
 
-if not exist %OUTDIR% (
-    mkdir %OUTDIR%
+if not exist "%OUTDIR%" (
+    mkdir "%OUTDIR%"
 )
 
 echo =============================================
@@ -16,34 +15,28 @@ echo =============================================
 REM Save start time to log file
 echo START: %date% %time% > run_times.txt
 
-REM p' values
-set PVALUES=0.00 0.05 0.10 0.15 0.20 0.25
+REM Outer loop: p' values
+for %%P in (0.00 0.05 0.10 0.15 0.20 0.25) do (
 
-REM pruning strategies
-set PRUNE=set random hebb
+    REM Middle loop: pruning strategies (cp)
+    for %%CP in (set random hebb) do (
 
-REM growth strategies
-set GROW=random hebb
+        REM Inner loop: growth strategies (cg)
+        for %%CG in (random hebb) do (
 
-for %%P in (%PVALUES%) do (
-    for %%CP in (%PRUNE%) do (
-        for %%CG in (%GROW%) do (
+            echo ------------------------------------------------------------
+            echo Running p'=%%P, prune=%%CP, grow=%%CG
+            echo Log: %OUTDIR%\mixer_p%%P_cp%%CP_cg%%CG.txt
+            echo ------------------------------------------------------------
 
-            set FNAME=mixer_p%%P_cp%%CP_cg%%CG.txt
-
-            echo ============================================================
-            echo Running p'=%%P%%, prune=%%CP%%, grow=%%CG%%
-            echo Log: %OUTDIR%\!FNAME!
-            echo ============================================================
-
-            python evaluation/train.py ^
+            python evaluation\train.py ^
                 --model mixer ^
                 --epochs 20 ^
                 --p_inter %%P ^
                 --sparsity_mode dynamic ^
                 --cp %%CP ^
                 --cg %%CG ^
-                > "%OUTDIR%\!FNAME!"
+                > "%OUTDIR%\mixer_p%%P_cp%%CP_cg%%CG.txt"
 
             echo.
         )
