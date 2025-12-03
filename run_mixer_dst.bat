@@ -19,14 +19,14 @@ REM Outer loop: p' values
 for %%P in (0.00 0.05 0.10 0.15 0.20 0.25) do (
 
     REM Middle loop: pruning strategies (cp)
-    for %%CP in (set random hebb) do (
+    for %%C in (set random hebb) do (
 
         REM Inner loop: growth strategies (cg)
-        for %%CG in (random hebb) do (
+        for %%G in (random hebb) do (
 
             echo ------------------------------------------------------------
-            echo Running p'=%%P, prune=%%CP, grow=%%CG
-            echo Log: %OUTDIR%\mixer_p%%P_cp%%CP_cg%%CG.txt
+            echo Running p'=%%P, prune=%%C, grow=%%G
+            echo Log: %OUTDIR%\mixer_p%%P_cp%%C_cg%%G.txt
             echo ------------------------------------------------------------
 
             python evaluation\train.py ^
@@ -34,9 +34,9 @@ for %%P in (0.00 0.05 0.10 0.15 0.20 0.25) do (
                 --epochs 20 ^
                 --p_inter %%P ^
                 --sparsity_mode dynamic ^
-                --cp %%CP ^
-                --cg %%CG ^
-                > "%OUTDIR%\mixer_p%%P_cp%%CP_cg%%CG.txt"
+                --cp %%C ^
+                --cg %%G ^
+                > "%OUTDIR%\mixer_p%%P_cp%%C_cg%%G.txt"
 
             echo.
         )
