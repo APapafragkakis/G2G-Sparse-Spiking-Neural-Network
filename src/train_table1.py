@@ -354,6 +354,26 @@ def main():
         )
         print(line)
 
+    # Save results to files (moved inside main to access local 'results')
+    os.makedirs("table1_results", exist_ok=True)
+
+    # TXT summary
+    with open("table1_results/table1_fmnist.txt", "w") as f:
+        f.write("Connectivity Pattern,Accuracy,Params\n")
+        for r in results:
+            f.write(f"{r['label']},{100*r['test_acc']:.2f},{r['params_head']}\n")
+
+    # CSV summary
+    with open("table1_results/table1_fmnist.csv", "w") as f:
+        f.write("id,label,accuracy,params\n")
+        for r in results:
+            f.write(f"{r['id']},{r['label']},{100*r['test_acc']:.2f},{r['params_head']}\n")
+
+    # JSON summary
+    import json
+    with open("table1_results/table1_fmnist.json", "w") as f:
+        json.dump(results, f, indent=4)
+
 
 if __name__ == "__main__":
     main()
