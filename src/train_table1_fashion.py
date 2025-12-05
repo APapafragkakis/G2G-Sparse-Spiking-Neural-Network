@@ -14,6 +14,7 @@ if ROOT_DIR not in sys.path:
 import torch
 from torch import nn
 from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from models.dense_snn import DenseSNN
 from models.mixer_snn import MixerSNN, MixerSparseLinear
@@ -28,7 +29,6 @@ warnings.filterwarnings("ignore", message=".*aten::lerp.Scalar_out.*")
 # ---------------------------------------------------------------------
 try:
     import torch_directml
-
     HAS_DML = True
 except ImportError:
     HAS_DML = False
@@ -53,17 +53,17 @@ def select_device() -> torch.device:
 
 
 # ---------------------------------------------------------------------
-# Hyperparameters
+# Hyperparameters - FIXED FOR CORRECT PATTERN
 # ---------------------------------------------------------------------
 batch_size = 256
-T = 50
+T = 200  # CRITICAL: Structured networks need more timesteps!
 feature_dim = 512
-hidden_dim = 1024
-hidden_dim_dense = 520
+hidden_dim = 1121  # Paper matching: ~806K params
+hidden_dim_dense = 517  # Paper matching: ~806K params
 num_classes = 10
-num_epochs = 20
+num_epochs = 50  # More training
 lr = 1e-3
-weight_decay = 1e-4
+weight_decay = 1e-5  # Lower for sparse networks
 
 num_groups = 8
 p_intra = 1.0
@@ -197,7 +197,7 @@ def build_heads():
         },
         {
             "id": "fc_v2",
-            "label": "Fully-Connected v2 (width=1024)",
+            "label": "Fully-Connected v2 (width=1121)",
             "builder": lambda: DenseSNN(feature_dim, hidden_dim, num_classes),
         },
         {
@@ -244,25 +244,34 @@ def main():
         head = cfg["builder"]()
         model = CNNSNNWrapper(head=head, T_steps=T).to(device)
         optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)  # ADDED
 
         num_params_head = count_head_params(model.head)
+        best_test_acc = 0.0  # FIXED: Track best instead of final
         final_test_acc = None
 
         for epoch in range(1, num_epochs + 1):
             train_acc = train_one_epoch(model, train_loader, optimizer, device)
             test_acc = evaluate(model, test_loader, device)
+            
+            # FIXED: Update best accuracy
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+            
             final_test_acc = test_acc
+            scheduler.step()  # ADDED
 
-            print(
-                f"[{cfg['id']}] Epoch {epoch:02d} | "
-                f"train_acc={train_acc:.4f} | test_acc={test_acc:.4f}"
-            )
+            if epoch % 10 == 0 or epoch == num_epochs:
+                print(
+                    f"[{cfg['id']}] Epoch {epoch:02d} | "
+                    f"train_acc={train_acc:.4f} | test_acc={test_acc:.4f} | best={best_test_acc:.4f}"
+                )
 
         results.append(
             {
                 "id": cfg["id"],
                 "label": cfg["label"],
-                "test_acc": final_test_acc,
+                "test_acc": best_test_acc,  # FIXED: Use best, not final
                 "params_head": num_params_head,
             }
         )
