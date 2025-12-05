@@ -59,7 +59,7 @@ batch_size = 256
 T = 50
 feature_dim = 512
 hidden_dim = 1024
-hidden_dim_dense = 512
+hidden_dim_dense = 520
 num_classes = 10
 num_epochs = 20
 lr = 1e-3
@@ -68,7 +68,7 @@ weight_decay = 1e-4
 num_groups = 8
 p_intra = 1.0
 p_inter = 0.15
-p_er_active = 0.18
+p_er_active = 0.25625
 
 
 # ---------------------------------------------------------------------
