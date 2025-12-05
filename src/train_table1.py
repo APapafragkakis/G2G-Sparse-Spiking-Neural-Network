@@ -1,7 +1,8 @@
 import os
 import sys
+import warnings
 
-# project root στο sys.path
+# Add project root to sys.path (same pattern as train.py)
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -10,66 +11,102 @@ import torch
 from torch import nn
 from torch.optim import Adam
 
-from models.dense_snn import DenseSNN          # FC SNN :contentReference[oaicite:2]{index=2}
-from models.mixer_snn import MixerSNN          # G2GNet (Proposed, Mixer) :contentReference[oaicite:3]{index=3}
-from models.er_snn import ERSNN                # ER Random (το νέο που έφτιαξες)
-from data.data_fashionmnist import get_fashion_loaders  # :contentReference[oaicite:4]{index=4}
-from utils.encoding import rate_encode         # :contentReference[oaicite:5]{index=5}
+from models.dense_snn import DenseSNN
+from models.mixer_snn import MixerSNN
+from models.er_snn import ERSNN
+from data.data_fashionmnist import get_fashion_loaders
+from utils.encoding import rate_encode
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*aten::lerp.Scalar_out.*"
+)
+
+# Try to match the device selection logic from train.py (DirectML / CUDA / CPU)
+try:
+    import torch_directml
+    HAS_DML = True
+except ImportError:
+    HAS_DML = False
 
 
-# ==========================
-#  HYPERPARAMETERS
-# ==========================
+def select_device() -> torch.device:
+    """Select compute device following the same priority as train.py."""
+    if HAS_DML:
+        device = torch_directml.device()
+        print(f"Using DirectML device: {device}")
+        return device
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        gpu_name = torch.cuda.get_device_name(0)
+        cuda_version = torch.version.cuda
+        print(f"Using GPU: {gpu_name} | CUDA version: {cuda_version}")
+        return device
+
+    device = torch.device("cpu")
+    print("No GPU backend available — using CPU.")
+    return device
+
+
+# -------------------------------------------------------------------
+# Hyperparameters – kept in sync with train.py
+# -------------------------------------------------------------------
 
 batch_size = 256
 T = 50
 input_dim = 28 * 28
-hidden_dim = 1024          # ίδιο width με G2GNet
-hidden_dim_dense = 447     # περίπου ίδιο #params με sparse G2GNet
+hidden_dim = 1024          # same width as G2GNet sparse models
+hidden_dim_dense = 447     # chosen to roughly match the parameter count
 num_classes = 10
 num_epochs = 20
 lr = 1e-3
 weight_decay = 1e-4
 
-# G2GNet mixer hyperparams
+# Mixer (G2GNet) connectivity parameters
 num_groups = 8
 p_intra = 1.0
 p_inter = 0.15
 
-# ER random density (ξεκίνα π.χ. 0.2, το ρυθμίζεις αν θες ίδιο #params με Mixer)
+# ER random density; can be tuned if you want closer param matching
 p_er_active = 0.20
 
 
-def select_device():
-    if torch.cuda.is_available():
-        dev = torch.device("cuda")
-        print("Using CUDA:", torch.cuda.get_device_name(0))
-        return dev
-    print("Using CPU")
-    return torch.device("cpu")
-
-
 def count_params(model: nn.Module) -> int:
+    """Return the total number of trainable parameters."""
     return sum(p.numel() for p in model.parameters())
 
 
-def train_one_epoch(model, loader, optimizer, device):
+def train_one_epoch(model: nn.Module,
+                    loader,
+                    optimizer: Adam,
+                    device: torch.device) -> float:
+    """
+    Single training epoch.
+
+    This mirrors the logic used in train.py:
+    - encode images into spike trains with rate encoding
+    - accumulate spike counts at the output
+    - standard cross-entropy loss on spike counts
+    """
     model.train()
     total = 0
     correct = 0
 
     for images, labels in loader:
         labels = labels.to(device, non_blocking=True)
-        spikes = rate_encode(images, T).to(device)  # [T, B, 784]
+
+        # [T, B, input_dim]
+        spikes = rate_encode(images, T).to(device)
 
         optimizer.zero_grad()
-        spk_counts = model(spikes)                 # [B, num_classes]
+        logits = model(spikes)
 
-        loss = nn.CrossEntropyLoss()(spk_counts, labels)
+        loss = nn.CrossEntropyLoss()(logits, labels)
         loss.backward()
         optimizer.step()
 
-        preds = spk_counts.argmax(dim=1)
+        preds = logits.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += labels.size(0)
 
@@ -77,7 +114,12 @@ def train_one_epoch(model, loader, optimizer, device):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model: nn.Module,
+             loader,
+             device: torch.device) -> float:
+    """
+    Evaluation loop, identical in spirit to the one in train.py.
+    """
     model.eval()
     total = 0
     correct = 0
@@ -85,22 +127,23 @@ def evaluate(model, loader, device):
     for images, labels in loader:
         labels = labels.to(device, non_blocking=True)
         spikes = rate_encode(images, T).to(device)
-        spk_counts = model(spikes)
-        preds = spk_counts.argmax(dim=1)
+        logits = model(spikes)
+        preds = logits.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += labels.size(0)
 
     return correct / total
 
 
-def build_models():
+def build_table1_models():
     """
-    ΜΟΝΟ τα 4 rows του Table I:
+    Build the four SNN models that mirror the architectures in Table I:
 
-    1) Fully-Connected v1
-    2) Fully-Connected v2
-    3) ER Random Graph
-    4) G2GNet (Proposed) = Mixer
+      1) Fully-Connected v1  – dense MLP with roughly the same number
+                               of parameters as the sparse G2GNet model.
+      2) Fully-Connected v2  – dense MLP with the same width (1024 units).
+      3) ER Random Graph     – unstructured Erdos–Rényi sparse baseline.
+      4) G2GNet (Proposed)   – Mixer-style grouping (V1-inspired topology).
     """
     models_cfg = [
         {
@@ -141,9 +184,11 @@ def build_models():
 
 def main():
     device = select_device()
+
+    # Same data pipeline as train.py: Fashion-MNIST with ToTensor()
     train_loader, test_loader = get_fashion_loaders(batch_size)
 
-    models_cfg = build_models()
+    models_cfg = build_table1_models()
     results = []
 
     for cfg in models_cfg:
@@ -167,16 +212,18 @@ def main():
                 f"train_acc={train_acc:.4f} | test_acc={test_acc:.4f}"
             )
 
-        results.append({
-            "id": cfg["id"],
-            "label": cfg["label"],
-            "test_acc": final_test_acc,
-            "params": num_params,
-        })
+        results.append(
+            {
+                "id": cfg["id"],
+                "label": cfg["label"],
+                "test_acc": final_test_acc,
+                "params": num_params,
+            }
+        )
 
-    # Τελικό Table I (SNN έκδοση, μόνο FashionMNIST)
+    # Final SNN Table I-style summary for Fashion-MNIST
     print("\n" + "#" * 80)
-    print("SNN Table I-style results on FashionMNIST")
+    print("SNN Table I-style results on Fashion-MNIST")
     print("#" * 80)
     header = f"{'Connectivity Pattern':35s} | {'Test Acc (%)':12s} | {'#Params':>10s}"
     print(header)
