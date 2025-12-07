@@ -140,8 +140,8 @@ class IndexSNN(nn.Module):
         self.fc_out = nn.Linear(hidden_dim, num_classes)
 
         # LIF neuron parameters
-        beta = 0.95
-        spike_grad = surrogate.fast_sigmoid(slope=25)
+        beta = 0.90
+        spike_grad = surrogate.fast_sigmoid(slope=50)
 
         # Spiking (LIF) layers
         self.lif1 = snn.Leaky(beta=beta, spike_grad=spike_grad)
