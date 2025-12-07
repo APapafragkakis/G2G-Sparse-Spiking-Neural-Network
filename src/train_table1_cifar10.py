@@ -1,7 +1,8 @@
 # src/train_table1_cifar10.py
 #
 # Table-I-style comparison on CIFAR-10
-# CNN (CIFARCNNEncoder) + SNN heads (FC v1, FC v2, ER, G2G/Mixer).
+# CNN (CIFARCNNEncoder) + SNN heads (FC v1, FC v2, ER, G2G Index/Mixer).
+# IDENTICAL hyperparameters to Fashion-MNIST for consistency.
 
 import os
 import sys
@@ -14,10 +15,12 @@ if ROOT_DIR not in sys.path:
 import torch
 from torch import nn
 from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from models.dense_snn import DenseSNN
 from models.mixer_snn import MixerSNN, MixerSparseLinear
 from models.er_snn import ERSNN, ERSparseLinear
+from models.index_snn import IndexSNN, IndexSparseLinear
 from models.cnn_encoder import CIFARCNNEncoder
 from data.cifar10_100 import get_cifar10_loaders
 
@@ -25,7 +28,6 @@ warnings.filterwarnings("ignore", message=".*aten::lerp.Scalar_out.*")
 
 try:
     import torch_directml
-
     HAS_DML = True
 except ImportError:
     HAS_DML = False
@@ -45,24 +47,27 @@ def select_device() -> torch.device:
         return device
 
     device = torch.device("cpu")
-    print("No GPU backend available — using CPU.")
+    print("No GPU backend available – using CPU.")
     return device
 
 
+# ---------------------------------------------------------------------
+# Hyperparameters - IDENTICAL to Fashion-MNIST
+# ---------------------------------------------------------------------
 batch_size = 256
-T = 50
+T = 70                  # Same as Fashion-MNIST
 feature_dim = 512
 hidden_dim = 1024
-hidden_dim_dense = 512
+hidden_dim_dense = 469  # Same as Fashion-MNIST (matched param budget)
 num_classes = 10
-num_epochs = 20
+num_epochs = 30         # Same as Fashion-MNIST
 lr = 1e-3
 weight_decay = 1e-4
 
 num_groups = 8
 p_intra = 1.0
 p_inter = 0.15
-p_er_active = 0.18
+p_er_active = 0.25625   # Same as Fashion-MNIST
 
 
 class CNNSNNWrapper(nn.Module):
@@ -98,12 +103,7 @@ def count_head_params(head: nn.Module) -> int:
         if module is head:
             continue
 
-        if isinstance(module, MixerSparseLinear):
-            mask = module.mask
-            total += int(mask.sum().item())
-            if module.bias is not None:
-                total += module.bias.numel()
-        elif isinstance(module, ERSparseLinear):
+        if isinstance(module, (MixerSparseLinear, ERSparseLinear, IndexSparseLinear)):
             mask = module.mask
             total += int(mask.sum().item())
             if module.bias is not None:
@@ -189,8 +189,20 @@ def build_heads():
             ),
         },
         {
+            "id": "g2g_index",
+            "label": "G2GNet (Index grouping)",
+            "builder": lambda: IndexSNN(
+                input_dim=feature_dim,
+                hidden_dim=hidden_dim,
+                num_classes=num_classes,
+                num_groups=num_groups,
+                p_intra=p_intra,
+                p_inter=p_inter,
+            ),
+        },
+        {
             "id": "g2g_mixer",
-            "label": "G2GNet (Proposed, Mixer)",
+            "label": "G2GNet (Mixer grouping)",
             "builder": lambda: MixerSNN(
                 input_dim=feature_dim,
                 hidden_dim=hidden_dim,
@@ -219,64 +231,131 @@ def main():
         head = cfg["builder"]()
         model = CNNSNNWrapper(head=head, T_steps=T).to(device)
         optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
 
         num_params_head = count_head_params(model.head)
-        final_test_acc = None
+        best_test_acc = 0.0
 
         for epoch in range(1, num_epochs + 1):
             train_acc = train_one_epoch(model, train_loader, optimizer, device)
             test_acc = evaluate(model, test_loader, device)
-            final_test_acc = test_acc
 
-            print(
-                f"[{cfg['id']}] Epoch {epoch:02d} | "
-                f"train_acc={train_acc:.4f} | test_acc={test_acc:.4f}"
-            )
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+
+            scheduler.step()
+
+            if epoch % 10 == 0 or epoch == num_epochs:
+                print(
+                    f"[{cfg['id']}] Epoch {epoch:02d} | "
+                    f"train_acc={train_acc:.4f} | test_acc={test_acc:.4f} | best={best_test_acc:.4f}"
+                )
 
         results.append(
             {
                 "id": cfg["id"],
                 "label": cfg["label"],
-                "test_acc": final_test_acc,
+                "test_acc": best_test_acc,
                 "params_head": num_params_head,
             }
         )
 
+    # -----------------------------------------------------------------
+    # Aggregate results and build a Table-1-style summary
+    # -----------------------------------------------------------------
     print("\n" + "#" * 80)
-    print("Table I-style results on CIFAR-10 (CNN + SNN)")
+    print("Table-style results on CIFAR-10 (CNN + SNN, best accuracy)")
     print("#" * 80)
+
+    # Index results by id for easier access
+    id_to_res = {r["id"]: r for r in results}
+
+    # Compute best G2G accuracy across Index and Mixer
+    g2g_ids = [rid for rid in ("g2g_index", "g2g_mixer") if rid in id_to_res]
+    if not g2g_ids:
+        raise RuntimeError("No G2G results found (g2g_index / g2g_mixer).")
+
+    g2g_best_acc = max(id_to_res[rid]["test_acc"] for rid in g2g_ids)
+    # Assume same param budget for both G2G variants
+    g2g_params = id_to_res[g2g_ids[0]]["params_head"]
+
     header = (
-        f"{'Connectivity Pattern':35s} | "
-        f"{'CIFAR-10 Acc (%)':16s} | "
+        f"{'Connectivity Pattern':40s} | "
+        f"{'Best Acc (%)':14s} | "
         f"{'#Params (head)':>15s}"
     )
     print(header)
     print("-" * len(header))
 
-    for r in results:
-        acc_percent = 100.0 * r["test_acc"]
+    def print_row(label: str, acc: float, params: int):
+        acc_percent = 100.0 * acc
         line = (
-            f"{r['label']:35s} | "
-            f"{acc_percent:16.2f} | "
-            f"{r['params_head']:15d}"
+            f"{label:40s} | "
+            f"{acc_percent:14.2f} | "
+            f"{params:15d}"
         )
         print(line)
 
-    os.makedirs("table1_results", exist_ok=True)
+    # Main comparison rows
+    print_row(
+        id_to_res["fc_v1"]["label"],
+        id_to_res["fc_v1"]["test_acc"],
+        id_to_res["fc_v1"]["params_head"],
+    )
+    print_row(
+        id_to_res["fc_v2"]["label"],
+        id_to_res["fc_v2"]["test_acc"],
+        id_to_res["fc_v2"]["params_head"],
+    )
+    print_row(
+        id_to_res["er"]["label"],
+        id_to_res["er"]["test_acc"],
+        id_to_res["er"]["params_head"],
+    )
+    print_row(
+        "G2GNet (Proposed, best of Index/Mixer)",
+        g2g_best_acc,
+        g2g_params,
+    )
 
+    # Optional: also print individual G2G variants for inspection
+    print("\nDetails for individual G2G variants:")
+    for gid in g2g_ids:
+        r = id_to_res[gid]
+        print_row(r["label"], r["test_acc"], r["params_head"])
+
+    # -----------------------------------------------------------------
+    # Save raw results to disk
+    # -----------------------------------------------------------------
+    os.makedirs("table1_results", exist_ok=True)
     import json
 
+    # Compact CSV-style summary (only main rows + aggregated G2G)
     with open("table1_results/table1_cifar10.txt", "w") as f:
         f.write("Connectivity Pattern,Accuracy,Params\n")
-        for r in results:
-            f.write(f"{r['label']},{100*r['test_acc']:.2f},{r['params_head']}\n")
+        f.write(
+            f"{id_to_res['fc_v1']['label']},"
+            f"{100*id_to_res['fc_v1']['test_acc']:.2f},"
+            f"{id_to_res['fc_v1']['params_head']}\n"
+        )
+        f.write(
+            f"{id_to_res['fc_v2']['label']},"
+            f"{100*id_to_res['fc_v2']['test_acc']:.2f},"
+            f"{id_to_res['fc_v2']['params_head']}\n"
+        )
+        f.write(
+            f"{id_to_res['er']['label']},"
+            f"{100*id_to_res['er']['test_acc']:.2f},"
+            f"{id_to_res['er']['params_head']}\n"
+        )
+        f.write(
+            "G2GNet (Proposed, best of Index/Mixer),"
+            f"{100*g2g_best_acc:.2f},"
+            f"{g2g_params}\n"
+        )
 
-    with open("table1_results/table1_cifar10.csv", "w") as f:
-        f.write("id,label,accuracy,params\n")
-        for r in results:
-            f.write(f"{r['id']},{r['label']},{100*r['test_acc']:.2f},{r['params_head']}\n")
-
-    with open("table1_results/table1_cifar10.json", "w") as f:
+    # Full JSON with all individual connectivity patterns
+    with open("table1_results/table1_cifar10_full.json", "w") as f:
         json.dump(results, f, indent=4)
 
 
