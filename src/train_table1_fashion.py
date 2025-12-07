@@ -57,7 +57,7 @@ def select_device() -> torch.device:
 # Hyperparameters for the SNN Table-1-style experiment
 # ---------------------------------------------------------------------
 batch_size = 256
-T = 50                  # Number of timesteps for rate-based SNN input
+T = 70                  # Number of timesteps for rate-based SNN input
 feature_dim = 512        # Output dimension of PatchConvEncoder
 hidden_dim = 1024        # Width of the main SNN head (matches G2GNet paper)
 hidden_dim_dense = 469   # Narrow FC baseline with similar param budget
