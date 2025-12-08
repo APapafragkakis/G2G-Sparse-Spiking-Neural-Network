@@ -1,6 +1,5 @@
 # src/train_table1_cifar100.py
 #
-# Table-I-style comparison on CIFAR-100
 # CNN (CIFARCNNEncoder) + SNN heads (FC v1, FC v2, ER, G2G/Mixer).
 
 import os

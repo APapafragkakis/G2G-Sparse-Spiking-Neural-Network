@@ -9,11 +9,11 @@ class PatchConvEncoder(nn.Module):
         
         self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.pool1 = nn.MaxPool2d(2, 2)  # 28→14
+        self.pool1 = nn.MaxPool2d(2, 2) 
         
         self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(128)
-        self.pool2 = nn.MaxPool2d(2, 2)  # 14→7
+        self.pool2 = nn.MaxPool2d(2, 2)  
         
         self.conv3 = nn.Conv2d(128, out_channels, kernel_size=3, padding=1, bias=False)
         self.bn3 = nn.BatchNorm2d(out_channels)

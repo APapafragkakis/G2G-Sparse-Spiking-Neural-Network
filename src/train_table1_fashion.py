@@ -1,7 +1,7 @@
 # src/train_table1_fmnist.py
 #
-# Table-style comparison on Fashion-MNIST
-# CNN (PatchConvEncoder) + SNN heads (FC v1, FC v2, ER, G2G-Index/Mixer).
+# Table-style comparison on Fashion-MNIST.
+# CNN encoder (PatchConvEncoder) + several SNN head variants.
 
 import os
 import sys
@@ -26,7 +26,7 @@ from data.fashionmnist import get_fashion_loaders
 warnings.filterwarnings("ignore", message=".*aten::lerp.Scalar_out.*")
 
 # ---------------------------------------------------------------------
-# Device selection
+# Device selection helpers
 # ---------------------------------------------------------------------
 try:
     import torch_directml
@@ -38,29 +38,29 @@ except ImportError:
 def select_device() -> torch.device:
     if HAS_DML:
         device = torch_directml.device()
-        print(f"Using DirectML device: {device}")
+        print(f"DirectML device in use: {device}")
         return device
 
     if torch.cuda.is_available():
         device = torch.device("cuda")
         gpu_name = torch.cuda.get_device_name(0)
         cuda_version = torch.version.cuda
-        print(f"Using GPU: {gpu_name} | CUDA version: {cuda_version}")
+        print(f"GPU detected: {gpu_name} (CUDA {cuda_version})")
         return device
 
     device = torch.device("cpu")
-    print("No GPU backend available — using CPU.")
+    print("No GPU found — using CPU.")
     return device
 
 
 # ---------------------------------------------------------------------
-# Hyperparameters for the SNN Table-1-style experiment
+# Hyperparameters for the experiment
 # ---------------------------------------------------------------------
 batch_size = 256
-T = 70                  # Number of timesteps for rate-based SNN input
-feature_dim = 512        # Output dimension of PatchConvEncoder
-hidden_dim = 1024        # Width of the main SNN head (matches G2GNet paper)
-hidden_dim_dense = 469   # Narrow FC baseline with similar param budget
+T = 70                  # timesteps for sequence input
+feature_dim = 512        # encoder output dim
+hidden_dim = 1024        # main SNN width
+hidden_dim_dense = 469   # narrow FC baseline to match params
 num_classes = 10
 num_epochs = 30
 lr = 1e-3
@@ -69,7 +69,7 @@ weight_decay = 1e-4
 num_groups = 8
 p_intra = 1.0
 p_inter = 0.15
-p_er_active = 0.25625    # ER sparsity chosen to match G2G param budget
+p_er_active = 0.25625    # ER sparsity tuned to match G2G param budget
 
 
 # ---------------------------------------------------------------------
@@ -77,8 +77,8 @@ p_er_active = 0.25625    # ER sparsity chosen to match G2G param budget
 # ---------------------------------------------------------------------
 class CNNSNNWrapper(nn.Module):
     """
-    Wraps a CNN feature extractor and an SNN classifier head.
-    The CNN encoder is shared across all connectivity patterns.
+    Encapsulate a CNN feature extractor and an SNN classification head.
+    The encoder is shared for all heads.
     """
 
     def __init__(self, head: nn.Module, T_steps: int = T):
@@ -90,6 +90,7 @@ class CNNSNNWrapper(nn.Module):
     def encode_to_sequence(self, images: torch.Tensor) -> torch.Tensor:
         feats = self.encoder(images)  # [B, 512]
 
+        # Normalize features to [-1, 1] range using max absolute value
         with torch.no_grad():
             feats_norm = torch.clamp(feats / feats.abs().max(), -1, 1)
 
@@ -108,8 +109,8 @@ class CNNSNNWrapper(nn.Module):
 # ---------------------------------------------------------------------
 def count_head_params(head: nn.Module) -> int:
     """
-    Count only the parameters of the SNN head.
-    For sparse layers, only active connections are counted.
+    Count parameters that belong to the SNN head.
+    For sparse layers, count only active connections.
     """
     total = 0
     for module in head.modules():
@@ -130,7 +131,7 @@ def count_head_params(head: nn.Module) -> int:
 
 
 # ---------------------------------------------------------------------
-# Training / evaluation
+# Training / evaluation loops
 # ---------------------------------------------------------------------
 def train_one_epoch(
     model: CNNSNNWrapper,
@@ -139,7 +140,7 @@ def train_one_epoch(
     device: torch.device,
 ) -> float:
     """
-    Single training epoch. Returns training accuracy.
+    Run one training epoch and return training accuracy.
     """
     model.train()
     total = 0
@@ -170,7 +171,7 @@ def evaluate(
     device: torch.device,
 ) -> float:
     """
-    Evaluate model on a given data loader. Returns accuracy.
+    Compute accuracy on provided dataset loader.
     """
     model.eval()
     total = 0
@@ -193,12 +194,12 @@ def evaluate(
 # ---------------------------------------------------------------------
 def build_heads():
     """
-    Define all connectivity patterns to be evaluated.
+    Return a list of head configurations to evaluate.
     """
     heads_cfg = [
         {
             "id": "fc_v1",
-            "label": "Fully-Connected v1 (same #params)",
+            "label": "Fully-Connected v1 (matched params)",
             "builder": lambda: DenseSNN(feature_dim, hidden_dim_dense, num_classes),
         },
         {
@@ -256,7 +257,7 @@ def main():
 
     for cfg in heads_cfg:
         print("\n" + "=" * 70)
-        print(f"Training model: {cfg['label']}  (id={cfg['id']})")
+        print(f"Start training: {cfg['label']} (id={cfg['id']})")
         print("=" * 70)
 
         head = cfg["builder"]()
@@ -292,10 +293,10 @@ def main():
         )
 
     # -----------------------------------------------------------------
-    # Aggregate results and build a Table-1-style summary
+    # Aggregate and display a compact table-like summary
     # -----------------------------------------------------------------
     print("\n" + "#" * 80)
-    print("Table-style results on Fashion-MNIST (CNN + SNN, best accuracy)")
+    print("Summary on Fashion-MNIST (CNN encoder + SNN heads)")
     print("#" * 80)
 
     # Index results by id for easier access
@@ -307,11 +308,11 @@ def main():
         raise RuntimeError("No G2G results found (g2g_index / g2g_mixer).")
 
     g2g_best_acc = max(id_to_res[rid]["test_acc"] for rid in g2g_ids)
-    # Assume same param budget for both G2G variants
+    # Use params of the first available G2G variant as representative
     g2g_params = id_to_res[g2g_ids[0]]["params_head"]
 
     header = (
-        f"{'Connectivity Pattern':40s} | "
+        f"{'Model (connectivity)':40s} | "
         f"{'Best Acc (%)':14s} | "
         f"{'#Params (head)':>15s}"
     )
@@ -344,7 +345,7 @@ def main():
         id_to_res["er"]["params_head"],
     )
     print_row(
-        "G2GNet (Proposed, best of Index/Mixer)",
+        "G2GNet (best of Index/Mixer)",
         g2g_best_acc,
         g2g_params,
     )
@@ -363,7 +364,7 @@ def main():
 
     # Compact CSV-style summary (only main rows + aggregated G2G)
     with open("table1_results/table1_fmnist.txt", "w") as f:
-        f.write("Connectivity Pattern,Accuracy,Params\n")
+        f.write("Model,Accuracy,Params\n")
         f.write(
             f"{id_to_res['fc_v1']['label']},"
             f"{100*id_to_res['fc_v1']['test_acc']:.2f},"
@@ -380,7 +381,7 @@ def main():
             f"{id_to_res['er']['params_head']}\n"
         )
         f.write(
-            "G2GNet (Proposed, best of Index/Mixer),"
+            "G2GNet (best of Index/Mixer),"
             f"{100*g2g_best_acc:.2f},"
             f"{g2g_params}\n"
         )
