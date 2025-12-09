@@ -160,3 +160,5 @@ G2GNet is inspired by ensemble connectivity in mouse visual cortex. The DST mech
 ---
 
 If you want to include biological motivation, CH similarity, or visual diagrams, let me know!
+
+---
