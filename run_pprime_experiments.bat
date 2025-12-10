@@ -11,19 +11,19 @@ if not exist logs (
 
 echo.
 echo ---- RUN 1: p_inter = 0.00 ----
-python src/train.py --model=index --epochs=10 --batch_size=128 --T=25 --p_inter=0.00 > logs/p_000.txt
+python train.py --model index --epochs 10 --batch_size 128 --T 25 --p_inter 0.00 > logs/p_000.txt
 echo Log saved to logs/p_000.txt
 echo -----------------------------
 
 echo.
 echo ---- RUN 2: p_inter = 0.10 ----
-python src/train.py --model=index --epochs=10 --batch_size=128 --T=25 --p_inter=0.10 > logs/p_010.txt
+python train.py --model index --epochs 10 --batch_size 128 --T 25 --p_inter 0.10 > logs/p_010.txt
 echo Log saved to logs/p_010.txt
 echo -----------------------------
 
 echo.
 echo ---- RUN 3: p_inter = 0.25 ----
-python src/train.py --model=index --epochs=10 --batch_size=128 --T=25 --p_inter=0.25 > logs/p_025.txt
+python train.py --model index --epochs 10 --batch_size 128 --T 25 --p_inter 0.25 > logs/p_025.txt
 echo Log saved to logs/p_025.txt
 echo -----------------------------
 
