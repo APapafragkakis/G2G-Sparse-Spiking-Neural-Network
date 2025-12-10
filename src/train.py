@@ -353,6 +353,81 @@ def compute_group_synchrony(model, loader, device, num_groups: int):
     return sync
 
 
+@torch.no_grad()
+def compute_input_spike_dispersion(model, loader, device):
+    """
+    Measures temporal dispersion of incoming spikes for each neuron.
+    Higher dispersion means inputs arrive asynchronously, making it harder
+    for neurons to accumulate charge and reach threshold due to membrane leakage.
+    
+    This directly tests the hypothesis: higher p_inter -> more cross-group connections
+    -> inputs from neurons processing different features -> asynchronous spike arrival
+    -> lower effective input integration -> reduced firing rates.
+    """
+    if not isinstance(model, IndexSNN):
+        raise TypeError("compute_input_spike_dispersion requires IndexSNN")
+    
+    model.eval()
+    
+    layer_configs = [
+        ("layer2", model.fc2, "layer1"),
+        ("layer3", model.fc3, "layer2"),
+    ]
+    
+    results = {}
+    
+    for images, _ in loader:
+        B = images.size(0)
+        spikes_input = rate_encode(images, T).to(device)
+        _, hidden_time = model(spikes_input, return_time_series=True)
+        
+        for target_name, fc_layer, source_name in layer_configs:
+            mask = fc_layer.mask
+            source_spikes = hidden_time[source_name]
+            T_steps, _, N_in = source_spikes.shape
+            N_out = mask.size(0)
+            
+            t_indices = torch.arange(T_steps, device=device, dtype=torch.float32)
+            
+            dispersions = []
+            
+            for neuron_idx in range(N_out):
+                conn_mask = mask[neuron_idx].bool()
+                num_connected = conn_mask.sum().item()
+                
+                if num_connected == 0:
+                    continue
+                
+                incoming = source_spikes[:, :, conn_mask]
+                
+                spike_times = []
+                for t in range(T_steps):
+                    if incoming[t].sum() > 0:
+                        spike_times.append(t)
+                
+                if len(spike_times) < 2:
+                    continue
+                
+                spike_times_tensor = torch.tensor(spike_times, dtype=torch.float32, device=device)
+                std_val = spike_times_tensor.std().item()
+                dispersions.append(std_val)
+            
+            if dispersions:
+                key = f"{target_name}_input_dispersion"
+                mean_disp = sum(dispersions) / len(dispersions)
+                if key not in results:
+                    results[key] = []
+                results[key].append(mean_disp)
+        
+        break
+    
+    final_results = {}
+    for key, vals in results.items():
+        final_results[key] = sum(vals) / len(vals) if vals else 0.0
+    
+    return final_results
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Train SNN on Fashion-MNIST.")
     p.add_argument("--model", type=str, default="dense",
@@ -416,6 +491,12 @@ def main():
         print(f"  Layer 2 mean temporal var: {sync['layer2_mean_temporal_var']:.6f}")
         print(f"  Layer 3 mean temporal var: {sync['layer3_mean_temporal_var']:.6f}")
         print("  (Lower variance => more synchronized spikes within groups)")
+        
+        disp = compute_input_spike_dispersion(model, test_loader, device)
+        print("\nInput spike temporal dispersion (std of spike arrival times):")
+        print(f"  Layer 2 input dispersion: {disp.get('layer2_input_dispersion', 0.0):.6f}")
+        print(f"  Layer 3 input dispersion: {disp.get('layer3_input_dispersion', 0.0):.6f}")
+        print("  (Higher dispersion => more asynchronous inputs => harder to reach threshold)")
 
 
 if __name__ == "__main__":
