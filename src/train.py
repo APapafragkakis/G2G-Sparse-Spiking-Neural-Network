@@ -247,30 +247,52 @@ def dst_step(model, prune_frac=0.025):
     print("[DST] step executed")
 
 
-def train_one_epoch(model, loader, optimizer, device, epoch_idx, use_dst):
+def train_one_epoch(model, loader, optimizer, device, epoch_idx: int, use_dst: bool):
+    """
+    Train the model for one epoch.
+
+    Τώρα τυπώνει και progress (%) μέσα στο epoch,
+    για να βλέπεις ότι δεν έχει κολλήσει.
+    """
     global global_step
     model.train()
     total = 0
     correct = 0
 
+    total_batches = len(loader)
+    next_print = 10  # θα τυπώνουμε περίπου κάθε +10%
+
     for batch_idx, (images, labels) in enumerate(loader):
+        # ---- PROGRESS PRINT ----
+        progress = int(((batch_idx + 1) / total_batches) * 100)
+        if progress >= next_print or batch_idx == 0 or batch_idx == total_batches - 1:
+            print(f"[Epoch {epoch_idx}] Progress: {progress:3d}% "
+                  f"({batch_idx + 1}/{total_batches} batches)")
+            next_print += 10
+        # ------------------------
+
         labels = labels.to(device, non_blocking=True)
-        spikes = rate_encode(images, T).to(device)
+
+        # Encode images into spike trains
+        spikes = rate_encode(images, T).to(device)   # [T, B, 784]
 
         optimizer.zero_grad()
 
         if use_dst and isinstance(model, MixerSNN):
+            # Ask the model to return per-layer activations for Hebbian updates
             spk_counts, activations = model(spikes, return_activations=True)
             update_hebb_buffer(spikes, activations)
         else:
-            spk_counts = model(spikes)
+            spk_counts = model(spikes)  # [B, num_classes]
 
         loss = nn.CrossEntropyLoss()(spk_counts, labels)
         loss.backward()
         optimizer.step()
 
-        if use_dst and isinstance(model, MixerSNN) and global_step > 0 and global_step % UPDATE_INTERVAL == 0:
-            dst_step(model, prune_frac=0.025)
+        # Dynamic Sparse Training step (MixerSNN only)
+        if use_dst and isinstance(model, MixerSNN):
+            if global_step > 0 and global_step % UPDATE_INTERVAL == 0:
+                dst_step(model, prune_frac=0.025)
 
         global_step += 1
 
@@ -278,8 +300,8 @@ def train_one_epoch(model, loader, optimizer, device, epoch_idx, use_dst):
         correct += (preds == labels).sum().item()
         total += labels.size(0)
 
-    return correct / total
-
+    acc = correct / total
+    return acc
 
 @torch.no_grad()
 def evaluate(model, loader, device):
