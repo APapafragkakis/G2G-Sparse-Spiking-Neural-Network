@@ -52,7 +52,7 @@ def select_device():
 
 # Shared hyperparameters
 batch_size = 256
-T = 50                      # <-- default, now overridable via --T
+T = 50                      # <-- default, overridable via --T
 input_dim = 28 * 28
 hidden_dim = 1024
 hidden_dim_dense = 447      # Dense baseline with similar params
@@ -357,7 +357,6 @@ def parse_args():
     parser.add_argument("--cg", type=str, default="hebb",
                         choices=["hebb", "random"])
 
-    # ⭐ NEW PARAM for controlling time steps T
     parser.add_argument("--T", type=int, default=T,
                         help="Number of time steps for SNN simulation.")
 
@@ -375,9 +374,13 @@ def main():
 
     print(f"Selected model: {args.model}")
     print(f"Sparsity mode: {args.sparsity_mode}")
-    print(f"C_P: {cp_mode}")
-    print(f"C_G: {cg_mode}")
     print(f"Time steps T: {T}")
+
+    if args.sparsity_mode == "dynamic":
+        print(f"C_P (prune): {cp_mode}")
+        print(f"C_G (grow):  {cg_mode}")
+    else:
+        print("Static sparsity: no DST (C_P/C_G ignored)")
 
     train_loader, test_loader = get_fashion_loaders(batch_size)
     model = build_model(args.model, p_inter=args.p_inter).to(device)
