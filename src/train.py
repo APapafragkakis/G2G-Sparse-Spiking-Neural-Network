@@ -640,6 +640,32 @@ def main():
             print("\n  Interpretation:")
             print("    Negative r (cross-group vs coherence): more cross-group -> less synchronized inputs")
             print("    Positive r (coherence vs firing): more synchronized inputs -> higher firing rates")
+        
+        # Within-group correlation analysis
+        import numpy as np
+        print("\n" + "="*70)
+        print("Within-Group Spike Correlation Analysis")
+        print("="*70)
+        wg_results = compute_within_group_correlation(model, test_loader, device)
+        
+        for layer_name in ["layer1", "layer2", "layer3"]:
+            if layer_name in wg_results:
+                d = wg_results[layer_name]
+                print(f"\n{layer_name.upper()}:")
+                print(f"  Mean within-group correlation: {d['mean_correlation']:.4f} ± {d['std_correlation']:.4f}")
+                print(f"  Range: [{d['min_correlation']:.4f}, {d['max_correlation']:.4f}]")
+                
+                if "mean_input_entropy" in d:
+                    print(f"  Input feature diversity (entropy): {d['mean_input_entropy']:.4f} ± {d['std_input_entropy']:.4f}")
+                    print(f"    (max entropy = {np.log2(model.fc1.num_groups):.2f} bits)")
+        
+        print("\n" + "="*70)
+        print("Interpretation:")
+        print("  High correlation  → Neurons spike together → receive similar features")
+        print("  Low correlation   → Neurons spike independently → receive diverse features")
+        print("  High entropy      → Group receives from many input groups (diverse)")
+        print("  Low entropy       → Group receives from few input groups (focused)")
+        print("="*70 + "\n")
 
 
 if __name__ == "__main__":
