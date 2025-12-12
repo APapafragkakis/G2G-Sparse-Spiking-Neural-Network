@@ -399,8 +399,7 @@ def compute_cross_group_coherence(model, loader, device):
             cross_group_ratios = []
             firing_rates = []
             
-            sample_size = min(200, N_out)
-            sampled_neurons = torch.randperm(N_out, device=device)[:sample_size]
+            sampled_neurons = torch.arange(N_out, device=device)
             
             for neuron_idx in sampled_neurons:
                 neuron_idx = neuron_idx.item()
