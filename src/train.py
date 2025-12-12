@@ -524,7 +524,7 @@ def compute_within_group_correlation(model, loader, device):
                 if len(corrs) > 0:
                     group_correlations.append(np.mean(corrs))
                 
-                if layer_name == "layer1":
+                if layer_name == "layer2":
                     input_group_counts = torch.zeros(num_groups, device=device)
                     input_group_size = fc_layer.in_features // num_groups
                     
@@ -551,7 +551,7 @@ def compute_within_group_correlation(model, loader, device):
                     "max_correlation": np.max(group_correlations),
                 }
                 
-                if len(group_entropies) > 0 and layer_name == "layer1":
+                if len(group_entropies) > 0 and layer_name == "layer2":
                     results[layer_name]["mean_input_entropy"] = np.mean(group_entropies)
                     results[layer_name]["std_input_entropy"] = np.std(group_entropies)
         
