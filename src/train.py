@@ -467,9 +467,6 @@ def compute_cross_group_coherence(model, loader, device):
 
 @torch.no_grad()
 def compute_within_group_correlation(model, loader, device):
-    """
-    Μετράει πόσο συγχρονισμένα spike-άρουν neurons ΜΕΣΑ στο ίδιο group.
-    """
     if not isinstance(model, IndexSNN):
         raise TypeError("Requires IndexSNN")
     
