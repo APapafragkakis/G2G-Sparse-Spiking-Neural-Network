@@ -311,7 +311,6 @@ def compute_group_synchrony(model, loader, device, num_groups: int):
         B = images.size(0)
         spikes = rate_encode(images, T).to(device)  # [T, B, 784]
 
-        # εδώ θέλουμε πλήρες time-series από το IndexSNN
         _, hidden_time = model(spikes, return_time_series=True)
         # hidden_time["layerX"]: [T, B, H]
 
