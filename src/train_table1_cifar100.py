@@ -1,7 +1,7 @@
 # src/train_table1_cifar100.py
 #
 # Table-I-style comparison on CIFAR-100
-# CNN (CIFARCNNEncoder) + SNN heads (FC v1, FC v2, ER, G2G/Mixer).
+# Paper-faithful patch encoder (16 patches) + SNN heads (FC v1, FC v2, ER, G2G).
 
 import os
 import sys
@@ -20,7 +20,8 @@ from models.dense_snn import DenseSNN
 from models.mixer_snn import MixerSNN, MixerSparseLinear
 from models.er_snn import ERSNN, ERSparseLinear
 from models.index_snn import IndexSNN, IndexSparseLinear
-from models.cnn_encoder import CIFARCNNEncoder
+from models.cnn_encoder import PatchEncoder
+
 from data.cifar10_100 import get_cifar100_loaders
 
 warnings.filterwarnings("ignore", message=".*aten::lerp.Scalar_out.*")
@@ -51,28 +52,31 @@ def select_device() -> torch.device:
 
 
 # ---------------------------------------------------------------------
-# Hyperparameters - IDENTICAL to Fashion-MNIST and CIFAR-10
+# Hyperparameters 
 # ---------------------------------------------------------------------
 batch_size = 256
-T = 70                  # Same as Fashion-MNIST and CIFAR-10
+T = 70
+
 feature_dim = 512
 hidden_dim = 1024
-hidden_dim_dense = 469  # Same as Fashion-MNIST and CIFAR-10
-num_classes = 100       # CIFAR-100 has 100 classes
-num_epochs = 30         # Same as Fashion-MNIST and CIFAR-10
+hidden_dim_dense = 469
+num_classes = 100
+num_epochs = 30
 lr = 1e-3
 weight_decay = 1e-4
 
 num_groups = 8
 p_intra = 1.0
 p_inter = 0.15
-p_er_active = 0.25625   # Same as Fashion-MNIST and CIFAR-10
+p_er_active = 0.25625
 
 
 class CNNSNNWrapper(nn.Module):
     def __init__(self, head: nn.Module, T_steps: int = T):
         super().__init__()
-        self.encoder = CIFARCNNEncoder()
+
+        # 32x32 split into 4x4=16 patches of size 8x8, conv per patch -> [B, 32, 4, 4] -> flatten [B, 512]
+        self.encoder = PaperPatchEncoder(in_channels=3, img_size=32, out_channels=32, grid_size=4)
         self.head = head
         self.T = T_steps
 
@@ -81,12 +85,10 @@ class CNNSNNWrapper(nn.Module):
         feats = self.encoder(images)  # [B, 512]
 
         with torch.no_grad():
-            f_min = feats.min(dim=1, keepdim=True)[0]
-            f_max = feats.max(dim=1, keepdim=True)[0]
-            denom = (f_max - f_min).clamp(min=1e-6)
-            feats_norm = (feats - f_min) / denom
+            denom = feats.abs().max().clamp(min=1e-6)
+            feats_norm = torch.clamp(feats / denom, -1, 1)
 
-        x_seq = feats_norm.unsqueeze(0).repeat(self.T, 1, 1)
+        x_seq = feats_norm.unsqueeze(0).repeat(self.T, 1, 1)  # [T, B, 512]
         return x_seq
 
     def forward(self, images: torch.Tensor, return_hidden_spikes: bool = False):
@@ -259,23 +261,16 @@ def main():
             }
         )
 
-    # -----------------------------------------------------------------
-    # Aggregate results and build a Table-1-style summary
-    # -----------------------------------------------------------------
-    print("\n" + "#" * 80)
-    print("Table-style results on CIFAR-100 (CNN + SNN, best accuracy)")
-    print("#" * 80)
+    print("\n")
+    print("Table-style results on CIFAR-100 (Patch encoder + SNN, best accuracy)")
 
-    # Index results by id for easier access
     id_to_res = {r["id"]: r for r in results}
 
-    # Compute best G2G accuracy across Index and Mixer
     g2g_ids = [rid for rid in ("g2g_index", "g2g_mixer") if rid in id_to_res]
     if not g2g_ids:
         raise RuntimeError("No G2G results found (g2g_index / g2g_mixer).")
 
     g2g_best_acc = max(id_to_res[rid]["test_acc"] for rid in g2g_ids)
-    # Assume same param budget for both G2G variants
     g2g_params = id_to_res[g2g_ids[0]]["params_head"]
 
     header = (
@@ -288,72 +283,28 @@ def main():
 
     def print_row(label: str, acc: float, params: int):
         acc_percent = 100.0 * acc
-        line = (
-            f"{label:40s} | "
-            f"{acc_percent:14.2f} | "
-            f"{params:15d}"
-        )
-        print(line)
+        print(f"{label:40s} | {acc_percent:14.2f} | {params:15d}")
 
-    # Main comparison rows
-    print_row(
-        id_to_res["fc_v1"]["label"],
-        id_to_res["fc_v1"]["test_acc"],
-        id_to_res["fc_v1"]["params_head"],
-    )
-    print_row(
-        id_to_res["fc_v2"]["label"],
-        id_to_res["fc_v2"]["test_acc"],
-        id_to_res["fc_v2"]["params_head"],
-    )
-    print_row(
-        id_to_res["er"]["label"],
-        id_to_res["er"]["test_acc"],
-        id_to_res["er"]["params_head"],
-    )
-    print_row(
-        "G2GNet (Proposed, best of Index/Mixer)",
-        g2g_best_acc,
-        g2g_params,
-    )
+    print_row(id_to_res["fc_v1"]["label"], id_to_res["fc_v1"]["test_acc"], id_to_res["fc_v1"]["params_head"])
+    print_row(id_to_res["fc_v2"]["label"], id_to_res["fc_v2"]["test_acc"], id_to_res["fc_v2"]["params_head"])
+    print_row(id_to_res["er"]["label"], id_to_res["er"]["test_acc"], id_to_res["er"]["params_head"])
+    print_row("G2GNet (Proposed, best of Index/Mixer)", g2g_best_acc, g2g_params)
 
-    # Optional: also print individual G2G variants for inspection
     print("\nDetails for individual G2G variants:")
     for gid in g2g_ids:
         r = id_to_res[gid]
         print_row(r["label"], r["test_acc"], r["params_head"])
 
-    # -----------------------------------------------------------------
-    # Save raw results to disk
-    # -----------------------------------------------------------------
     os.makedirs("table1_results", exist_ok=True)
     import json
 
-    # Compact CSV-style summary (only main rows + aggregated G2G)
     with open("table1_results/table1_cifar100.txt", "w") as f:
         f.write("Connectivity Pattern,Accuracy,Params\n")
-        f.write(
-            f"{id_to_res['fc_v1']['label']},"
-            f"{100*id_to_res['fc_v1']['test_acc']:.2f},"
-            f"{id_to_res['fc_v1']['params_head']}\n"
-        )
-        f.write(
-            f"{id_to_res['fc_v2']['label']},"
-            f"{100*id_to_res['fc_v2']['test_acc']:.2f},"
-            f"{id_to_res['fc_v2']['params_head']}\n"
-        )
-        f.write(
-            f"{id_to_res['er']['label']},"
-            f"{100*id_to_res['er']['test_acc']:.2f},"
-            f"{id_to_res['er']['params_head']}\n"
-        )
-        f.write(
-            "G2GNet (Proposed, best of Index/Mixer),"
-            f"{100*g2g_best_acc:.2f},"
-            f"{g2g_params}\n"
-        )
+        f.write(f"{id_to_res['fc_v1']['label']},{100*id_to_res['fc_v1']['test_acc']:.2f},{id_to_res['fc_v1']['params_head']}\n")
+        f.write(f"{id_to_res['fc_v2']['label']},{100*id_to_res['fc_v2']['test_acc']:.2f},{id_to_res['fc_v2']['params_head']}\n")
+        f.write(f"{id_to_res['er']['label']},{100*id_to_res['er']['test_acc']:.2f},{id_to_res['er']['params_head']}\n")
+        f.write(f"G2GNet (Proposed, best of Index/Mixer),{100*g2g_best_acc:.2f},{g2g_params}\n")
 
-    # Full JSON with all individual connectivity patterns
     with open("table1_results/table1_cifar100_full.json", "w") as f:
         json.dump(results, f, indent=4)
 
