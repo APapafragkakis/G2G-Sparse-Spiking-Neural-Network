@@ -1,7 +1,7 @@
 # src/train_table1_fmnist.py
 #
 # Table-style comparison on Fashion-MNIST.
-# CNN encoder (PatchConvEncoder) + several SNN head variants.
+# Paper-faithful patch encoder (16 patches) + several SNN head variants.
 
 import os
 import sys
@@ -20,7 +20,8 @@ from models.dense_snn import DenseSNN
 from models.mixer_snn import MixerSNN, MixerSparseLinear
 from models.er_snn import ERSNN, ERSparseLinear
 from models.index_snn import IndexSNN, IndexSparseLinear
-from models.cnn_encoder import PatchConvEncoder
+from models.cnn_encoder import PatchEncoder
+
 from data.fashionmnist import get_fashion_loaders
 
 warnings.filterwarnings("ignore", message=".*aten::lerp.Scalar_out.*")
@@ -58,7 +59,10 @@ def select_device() -> torch.device:
 # ---------------------------------------------------------------------
 batch_size = 256
 T = 70                  # timesteps for sequence input
-feature_dim = 512        # encoder output dim
+
+# Paper-faithful: 16 patches × 32 channels = 512
+feature_dim = 512
+
 hidden_dim = 1024        # main SNN width
 hidden_dim_dense = 469   # narrow FC baseline to match params
 num_classes = 10
@@ -83,18 +87,20 @@ class CNNSNNWrapper(nn.Module):
 
     def __init__(self, head: nn.Module, T_steps: int = T):
         super().__init__()
-        self.encoder = PatchConvEncoder(in_channels=1, out_channels=32)
+        # 28x28 split into 4x4=16 patches of size 7x7, conv per patch -> [B, 32, 4, 4] -> flatten [B, 512]
+        self.encoder = PaperPatchEncoder(in_channels=1, img_size=28, out_channels=32, grid_size=4)
         self.head = head
         self.T = T_steps
 
     def encode_to_sequence(self, images: torch.Tensor) -> torch.Tensor:
         feats = self.encoder(images)  # [B, 512]
 
-        # Normalize features to [-1, 1] range using max absolute value
+        # Normalize features to [-1, 1] range using max absolute value (safe)
         with torch.no_grad():
-            feats_norm = torch.clamp(feats / feats.abs().max(), -1, 1)
+            denom = feats.abs().max().clamp(min=1e-6)
+            feats_norm = torch.clamp(feats / denom, -1, 1)
 
-        x_seq = feats_norm.unsqueeze(0).repeat(self.T, 1, 1)
+        x_seq = feats_norm.unsqueeze(0).repeat(self.T, 1, 1)  # [T, B, 512]
         return x_seq
 
     def forward(self, images: torch.Tensor, return_hidden_spikes: bool = False):
@@ -292,22 +298,16 @@ def main():
             }
         )
 
-    # -----------------------------------------------------------------
-    # Aggregate and display a compact table-like summary
-    # -----------------------------------------------------------------
     print("\n")
-    print("Summary on Fashion-MNIST (CNN encoder + SNN heads)")
+    print("Summary on Fashion-MNIST (Patch encoder + SNN heads)")
 
-    # Index results by id for easier access
     id_to_res = {r["id"]: r for r in results}
 
-    # Compute best G2G accuracy across Index and Mixer
     g2g_ids = [rid for rid in ("g2g_index", "g2g_mixer") if rid in id_to_res]
     if not g2g_ids:
         raise RuntimeError("No G2G results found (g2g_index / g2g_mixer).")
 
     g2g_best_acc = max(id_to_res[rid]["test_acc"] for rid in g2g_ids)
-    # Use params of the first available G2G variant as representative
     g2g_params = id_to_res[g2g_ids[0]]["params_head"]
 
     header = (
@@ -327,65 +327,26 @@ def main():
         )
         print(line)
 
-    # Main comparison rows
-    print_row(
-        id_to_res["fc_v1"]["label"],
-        id_to_res["fc_v1"]["test_acc"],
-        id_to_res["fc_v1"]["params_head"],
-    )
-    print_row(
-        id_to_res["fc_v2"]["label"],
-        id_to_res["fc_v2"]["test_acc"],
-        id_to_res["fc_v2"]["params_head"],
-    )
-    print_row(
-        id_to_res["er"]["label"],
-        id_to_res["er"]["test_acc"],
-        id_to_res["er"]["params_head"],
-    )
-    print_row(
-        "G2GNet (best of Index/Mixer)",
-        g2g_best_acc,
-        g2g_params,
-    )
+    print_row(id_to_res["fc_v1"]["label"], id_to_res["fc_v1"]["test_acc"], id_to_res["fc_v1"]["params_head"])
+    print_row(id_to_res["fc_v2"]["label"], id_to_res["fc_v2"]["test_acc"], id_to_res["fc_v2"]["params_head"])
+    print_row(id_to_res["er"]["label"], id_to_res["er"]["test_acc"], id_to_res["er"]["params_head"])
+    print_row("G2GNet (best of Index/Mixer)", g2g_best_acc, g2g_params)
 
-    # Optional: also print individual G2G variants for inspection
     print("\nDetails for individual G2G variants:")
     for gid in g2g_ids:
         r = id_to_res[gid]
         print_row(r["label"], r["test_acc"], r["params_head"])
 
-    # -----------------------------------------------------------------
-    # Save raw results to disk
-    # -----------------------------------------------------------------
     os.makedirs("table1_results", exist_ok=True)
     import json
 
-    # Compact CSV-style summary (only main rows + aggregated G2G)
     with open("table1_results/table1_fmnist.txt", "w") as f:
         f.write("Model,Accuracy,Params\n")
-        f.write(
-            f"{id_to_res['fc_v1']['label']},"
-            f"{100*id_to_res['fc_v1']['test_acc']:.2f},"
-            f"{id_to_res['fc_v1']['params_head']}\n"
-        )
-        f.write(
-            f"{id_to_res['fc_v2']['label']},"
-            f"{100*id_to_res['fc_v2']['test_acc']:.2f},"
-            f"{id_to_res['fc_v2']['params_head']}\n"
-        )
-        f.write(
-            f"{id_to_res['er']['label']},"
-            f"{100*id_to_res['er']['test_acc']:.2f},"
-            f"{id_to_res['er']['params_head']}\n"
-        )
-        f.write(
-            "G2GNet (best of Index/Mixer),"
-            f"{100*g2g_best_acc:.2f},"
-            f"{g2g_params}\n"
-        )
+        f.write(f"{id_to_res['fc_v1']['label']},{100*id_to_res['fc_v1']['test_acc']:.2f},{id_to_res['fc_v1']['params_head']}\n")
+        f.write(f"{id_to_res['fc_v2']['label']},{100*id_to_res['fc_v2']['test_acc']:.2f},{id_to_res['fc_v2']['params_head']}\n")
+        f.write(f"{id_to_res['er']['label']},{100*id_to_res['er']['test_acc']:.2f},{id_to_res['er']['params_head']}\n")
+        f.write(f"G2GNet (best of Index/Mixer),{100*g2g_best_acc:.2f},{g2g_params}\n")
 
-    # Full JSON with all individual connectivity patterns
     with open("table1_results/table1_fmnist_full.json", "w") as f:
         json.dump(results, f, indent=4)
 
