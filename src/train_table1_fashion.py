@@ -59,10 +59,7 @@ def select_device() -> torch.device:
 # ---------------------------------------------------------------------
 batch_size = 256
 T = 70                  # timesteps for sequence input
-
-# Paper-faithful: 16 patches × 32 channels = 512
 feature_dim = 512
-
 hidden_dim = 1024        # main SNN width
 hidden_dim_dense = 469   # narrow FC baseline to match params
 num_classes = 10
