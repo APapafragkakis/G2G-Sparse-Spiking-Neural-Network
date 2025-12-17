@@ -39,7 +39,7 @@ def select_device():
     return torch.device("cpu")
 
 
-# defaults (override μέσω CLI)
+# defaults 
 batch_size = 256
 T = 50
 input_dim = 28 * 28
