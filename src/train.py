@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+import json
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
@@ -50,7 +51,7 @@ num_epochs = 20
 lr = 1e-3
 
 # Input encoding configuration (set from CLI)
-enc_mode = "current"  # "current" (analog/current injection) or "rate" (Bernoulli rate code)
+enc_mode = "current"
 enc_scale = 1.0
 enc_bias = 0.0
 
@@ -65,6 +66,58 @@ hebb_buffer = {"fc1": None, "fc2": None, "fc3": None}
 
 # Check if output is redirected (for .bat script compatibility)
 IS_TTY = sys.stdout.isatty()
+
+
+def get_checkpoint_path(args):
+    """Generate checkpoint filename based on configuration"""
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    filename = f"{args.dataset}_{args.model}_p{args.p_inter}_T{args.T}_{args.enc}.pth"
+    return os.path.join(checkpoint_dir, filename)
+
+
+def save_checkpoint(epoch, model, optimizer, args, metrics=None):
+    """Save training checkpoint"""
+    checkpoint_path = get_checkpoint_path(args)
+    
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'args': vars(args),
+        'global_step': global_step,
+    }
+    
+    if metrics is not None:
+        checkpoint['metrics'] = metrics
+    
+    torch.save(checkpoint, checkpoint_path)
+    print(f"[Checkpoint saved: epoch {epoch}]")
+
+
+def load_checkpoint(model, optimizer, args):
+    """Load training checkpoint if it exists"""
+    checkpoint_path = get_checkpoint_path(args)
+    
+    if not os.path.exists(checkpoint_path):
+        return 0  # Start from epoch 0
+    
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        global global_step
+        global_step = checkpoint.get('global_step', 0)
+        
+        start_epoch = checkpoint['epoch'] + 1  # Continue from next epoch
+        print(f"[Checkpoint loaded: resuming from epoch {start_epoch}]")
+        
+        return start_epoch
+    except Exception as e:
+        print(f"[Warning: Failed to load checkpoint: {e}]")
+        return 0
 
 
 def build_model(model_name: str, p_inter: float):
@@ -486,6 +539,7 @@ def parse_args():
     p.add_argument("--enc", type=str, default="current", choices=["current", "rate"])
     p.add_argument("--enc_scale", type=float, default=1.0)
     p.add_argument("--enc_bias", type=float, default=0.0)
+    p.add_argument("--no_checkpoint", action="store_true", help="Disable checkpoint saving/loading")
     return p.parse_args()
 
 
@@ -531,10 +585,43 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     use_dst = (args.sparsity_mode == "dynamic")
     
-    for epoch in range(1, args.epochs + 1):
-        train_acc = train_one_epoch(model, train_loader, optimizer, device, epoch, use_dst)
-        test_acc = evaluate(model, test_loader, device)
-        print(f"Epoch {epoch:02d} | train_acc={train_acc:.4f} | test_acc={test_acc:.4f}")
+    # Load checkpoint if exists (unless disabled)
+    start_epoch = 1
+    if not args.no_checkpoint:
+        start_epoch = load_checkpoint(model, optimizer, args)
+        if start_epoch > 1:
+            model = model.to(device)  # Ensure model is on correct device after loading
+    
+    # If already completed, skip training
+    if start_epoch > args.epochs:
+        print(f"[Training already completed - skipping to metrics computation]")
+    else:
+        try:
+            for epoch in range(start_epoch, args.epochs + 1):
+                train_acc = train_one_epoch(model, train_loader, optimizer, device, epoch, use_dst)
+                test_acc = evaluate(model, test_loader, device)
+                print(f"Epoch {epoch:02d} | train_acc={train_acc:.4f} | test_acc={test_acc:.4f}")
+                
+                # Save checkpoint after each epoch (unless disabled)
+                if not args.no_checkpoint:
+                    save_checkpoint(epoch, model, optimizer, args, {
+                        'train_acc': train_acc,
+                        'test_acc': test_acc
+                    })
+        except KeyboardInterrupt:
+            print("\n[Training interrupted - checkpoint saved]")
+            if not args.no_checkpoint:
+                # Save current progress before exiting
+                epoch_completed = epoch - 1 if epoch > start_epoch else start_epoch
+                save_checkpoint(epoch_completed, model, optimizer, args)
+            return
+    
+    # Clean up checkpoint after successful completion
+    if not args.no_checkpoint:
+        checkpoint_path = get_checkpoint_path(args)
+        if os.path.exists(checkpoint_path):
+            os.remove(checkpoint_path)
+            print("[Checkpoint removed - training completed successfully]")
     
     print("\n" + "=" * 70)
     print("FINAL METRICS")
