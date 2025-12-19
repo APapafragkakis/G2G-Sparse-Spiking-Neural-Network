@@ -22,7 +22,7 @@ set "ENC_BIAS=0.0"
 set "SPARSITY=static"
 
 REM p' lists
-set "P_LIST_MAIN=0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.40 0.50"
+set "P_LIST_MAIN=0.00 0.05 0.10 0.15 0.20 0.35 0.50 0.75 1.00"
 set "P_LIST_T=0.00 0.10 0.25 0.50"
 
 REM Root output folder (relative to this project folder)
