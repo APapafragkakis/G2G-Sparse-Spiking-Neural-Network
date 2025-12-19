@@ -2,6 +2,16 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM =========================
+REM PATHS
+REM =========================
+set "TRAIN=src\train.py"
+if not exist "%TRAIN%" (
+  echo ERROR: cannot find "%TRAIN%" from %CD%
+  echo Make sure you run this .bat from the project root.
+  exit /b 1
+)
+
+REM =========================
 REM GLOBAL DEFAULTS
 REM =========================
 set "EPOCHS=20"
@@ -39,7 +49,7 @@ for %%E in (current rate) do (
       for %%P in (%P_LIST_MAIN%) do (
         echo [PHASE 1] enc=%%E ^| dataset=%%D ^| model=%%M ^| p'=%%P
 
-        python train.py ^
+        python "%TRAIN%" ^
           --dataset %%D ^
           --model %%M ^
           --p_inter %%P ^
@@ -71,7 +81,7 @@ for %%P in (%P_LIST_T%) do (
   for %%T in (10 20 50) do (
     echo [PHASE 2] FashionMNIST ^| Index ^| p'=%%P ^| T=%%T
 
-    python train.py ^
+    python "%TRAIN%" ^
       --dataset fashionmnist ^
       --model index ^
       --p_inter %%P ^
