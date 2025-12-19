@@ -41,7 +41,7 @@ def select_device():
     return torch.device("cpu")
 
 
-# Default training parameters (can be overridden via CLI)
+
 batch_size = 256
 T = 50
 input_dim = 28 * 28
