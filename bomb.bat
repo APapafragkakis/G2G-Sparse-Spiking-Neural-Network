@@ -25,12 +25,16 @@ REM p' lists
 set "P_LIST_MAIN=0.00 0.05 0.10 0.15 0.20 0.35 0.50 0.75 1.00"
 set "P_LIST_T=0.00 0.10 0.25 0.50"
 
-REM Root output folder
+REM Root output folder (relative to this project folder)
 set "ROOT=results"
 if not exist "%ROOT%" mkdir "%ROOT%"
 
 REM ============================================================
 REM PHASE 1 — MAIN EXPERIMENT
+REM dataset × model × p' × encoding (current + rate)
+REM - dense runs ONCE per dataset/encoding (p' ignored)
+REM - non-dense models sweep over p'
+REM - skips runs whose output log already exists
 REM ============================================================
 echo.
 echo ===== PHASE 1: MAIN EXPERIMENT =====
@@ -45,13 +49,13 @@ for %%E in (current rate) do (
     if not exist "%PHASE1%\%%E\%%D" mkdir "%PHASE1%\%%E\%%D"
 
     REM -------------------------
-    REM DENSE: run ONCE (no p' sweep)
+    REM DENSE: run once
     REM -------------------------
     set "OUT=%PHASE1%\%%E\%%D\dense.txt"
     if exist "!OUT!" (
-      echo [SKIP] dense ^| enc=%%E ^| dataset=%%D (exists: !OUT!)
+      echo [SKIP] PHASE1 ^| enc=%%E ^| dataset=%%D ^| model=dense ^| exists: !OUT!
     ) else (
-      echo [PHASE 1] enc=%%E ^| dataset=%%D ^| model=dense
+      echo [PHASE1] enc=%%E ^| dataset=%%D ^| model=dense
 
       python "%TRAIN%" ^
         --dataset %%D ^
@@ -75,9 +79,9 @@ for %%E in (current rate) do (
         set "OUT=%PHASE1%\%%E\%%D\%%M_pinter_%%P.txt"
 
         if exist "!OUT!" (
-          echo [SKIP] %%M ^| enc=%%E ^| dataset=%%D ^| p'=%%P (exists)
+          echo [SKIP] PHASE1 ^| enc=%%E ^| dataset=%%D ^| model=%%M ^| p'=%%P ^| exists: !OUT!
         ) else (
-          echo [PHASE 1] enc=%%E ^| dataset=%%D ^| model=%%M ^| p'=%%P
+          echo [PHASE1] enc=%%E ^| dataset=%%D ^| model=%%M ^| p'=%%P
 
           python "%TRAIN%" ^
             --dataset %%D ^
@@ -99,6 +103,8 @@ for %%E in (current rate) do (
 
 REM ============================================================
 REM PHASE 2 — TIME WINDOW SENSITIVITY
+REM T sweep (current injection) + p' sweep
+REM - skips runs whose output log already exists
 REM ============================================================
 echo.
 echo ===== PHASE 2: TIME WINDOW SENSITIVITY =====
@@ -112,9 +118,9 @@ for %%P in (%P_LIST_T%) do (
     set "OUT=%PHASE2%\fashionmnist\index_pinter_%%P_T_%%T.txt"
 
     if exist "!OUT!" (
-      echo [SKIP] PHASE2 FashionMNIST ^| Index ^| p'=%%P ^| T=%%T (exists)
+      echo [SKIP] PHASE2 ^| dataset=fashionmnist ^| model=index ^| p'=%%P ^| T=%%T ^| exists: !OUT!
     ) else (
-      echo [PHASE 2] FashionMNIST ^| Index ^| p'=%%P ^| T=%%T
+      echo [PHASE2] dataset=fashionmnist ^| model=index ^| p'=%%P ^| T=%%T
 
       python "%TRAIN%" ^
         --dataset fashionmnist ^
