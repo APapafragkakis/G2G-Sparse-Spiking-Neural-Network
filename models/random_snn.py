@@ -147,7 +147,7 @@ class RandomSNN(nn.Module):
         self.lif3 = snn.Leaky(beta=beta, spike_grad=spike_grad)
         self.lif_out = snn.Leaky(beta=beta, spike_grad=spike_grad)
 
-    def forward(self, x_seq, return_hidden_spikes: bool = False):
+    def forward(self, x_seq, return_hidden_spikes: bool = False, return_activations: bool = False):
         # x_seq: [T, B, input_dim]
         T_steps, B, _ = x_seq.shape
 
@@ -158,11 +158,19 @@ class RandomSNN(nn.Module):
 
         spk_out_sum = torch.zeros(B, self.fc_out.out_features, device=x_seq.device)
 
-        # Optional accumulation for firing rate tracking
+        # Accumulation for firing rate tracking
         if return_hidden_spikes:
             spk1_sum = torch.zeros(B, self.fc1.out_features, device=x_seq.device)
             spk2_sum = torch.zeros(B, self.fc2.out_features, device=x_seq.device)
             spk3_sum = torch.zeros(B, self.fc3.out_features, device=x_seq.device)
+
+        # Per-timestep activations for DST
+        if return_activations:
+            activations = {
+                "layer1": [],
+                "layer2": [],
+                "layer3": [],
+            }
 
         for t in range(T_steps):
             x_t = x_seq[t]
@@ -190,12 +198,26 @@ class RandomSNN(nn.Module):
                 spk2_sum += spk2
                 spk3_sum += spk3
 
+            if return_activations:
+                activations["layer1"].append(spk1.detach().cpu())
+                activations["layer2"].append(spk2.detach().cpu())
+                activations["layer3"].append(spk3.detach().cpu())
+
+        if return_activations:
+            for k in activations:
+                activations[k] = torch.stack(activations[k], dim=0)
+
         if return_hidden_spikes:
             hidden_spikes = {
                 "layer1": spk1_sum,  # [B, hidden_dim]
                 "layer2": spk2_sum,
                 "layer3": spk3_sum,
             }
+            if return_activations:
+                return spk_out_sum, hidden_spikes, activations
             return spk_out_sum, hidden_spikes
+
+        if return_activations:
+            return spk_out_sum, activations
 
         return spk_out_sum
