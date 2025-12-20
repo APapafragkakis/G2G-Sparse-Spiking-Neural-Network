@@ -78,7 +78,13 @@ def get_checkpoint_path(args):
     
     # Format p_inter to avoid messy decimals
     p_str = f"{args.p_inter:.2f}".replace(".", "_")
-    filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.pth"
+    
+    # Include cp/cg only if using dynamic sparsity
+    if args.sparsity_mode == "dynamic":
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}_cp{args.cp}_cg{args.cg}.pth"
+    else:
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.pth"
+    
     return os.path.join(checkpoint_dir, filename)
 
 
@@ -88,7 +94,13 @@ def get_done_marker_path(args):
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     p_str = f"{args.p_inter:.2f}".replace(".", "_")
-    filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.DONE"
+    
+    # Include cp/cg only if using dynamic sparsity
+    if args.sparsity_mode == "dynamic":
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}_cp{args.cp}_cg{args.cg}.DONE"
+    else:
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.DONE"
+    
     return os.path.join(checkpoint_dir, filename)
 
 
