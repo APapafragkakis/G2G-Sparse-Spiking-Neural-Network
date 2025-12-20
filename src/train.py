@@ -9,8 +9,8 @@ if ROOT_DIR not in sys.path:
 import torch
 from torch import nn
 from models.dense_snn import DenseSNN
-from models.index_snn import IndexSNN
-from models.random_snn import RandomSNN
+from models.index_snn import IndexSNN, IndexSparseLinear
+from models.random_snn import RandomSNN, RandomGroupSparseLinear
 from models.mixer_snn import MixerSNN, MixerSparseLinear
 from data.fashionmnist import get_fashion_loaders
 from data.cifar10_100 import get_cifar10_loaders, get_cifar100_loaders
@@ -18,6 +18,10 @@ from utils.encoding import encode_input
 import warnings
 
 warnings.filterwarnings("ignore", message=".*aten::lerp.Scalar_out.*")
+
+# Sparse layer and model types for DST
+SPARSE_LAYER_TYPES = (MixerSparseLinear, IndexSparseLinear, RandomGroupSparseLinear)
+SPARSE_MODEL_TYPES = (MixerSNN, IndexSNN, RandomSNN)
 
 try:
     import torch_directml
@@ -74,7 +78,13 @@ def get_checkpoint_path(args):
     
     # Format p_inter to avoid messy decimals
     p_str = f"{args.p_inter:.2f}".replace(".", "_")
-    filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.pth"
+    
+    # Include cp/cg only if using dynamic sparsity
+    if args.sparsity_mode == "dynamic":
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}_cp{args.cp}_cg{args.cg}.pth"
+    else:
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.pth"
+    
     return os.path.join(checkpoint_dir, filename)
 
 
@@ -84,7 +94,13 @@ def get_done_marker_path(args):
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     p_str = f"{args.p_inter:.2f}".replace(".", "_")
-    filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.DONE"
+    
+    # Include cp/cg only if using dynamic sparsity
+    if args.sparsity_mode == "dynamic":
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}_cp{args.cp}_cg{args.cg}.DONE"
+    else:
+        filename = f"{args.dataset}_{args.model}_p{p_str}_T{args.T}_{args.enc}.DONE"
+    
     return os.path.join(checkpoint_dir, filename)
 
 
@@ -237,7 +253,7 @@ def dst_update_layer_cp_cg_single(layer, layer_name, prune_frac, cp_mode_local, 
 
 def dst_step(model, prune_frac=0.025):
     for name, module in model.named_modules():
-        if isinstance(module, MixerSparseLinear):
+        if isinstance(module, SPARSE_LAYER_TYPES):
             short = name.split(".")[-1]
             if short in hebb_buffer:
                 dst_update_layer_cp_cg_single(module, short, prune_frac, cp_mode, cg_mode)
@@ -279,7 +295,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch_idx, use_dst):
         labels = labels.to(device, non_blocking=True)
         x_seq = _make_input_sequence(images, device)
         optimizer.zero_grad()
-        if use_dst and isinstance(model, MixerSNN):
+        if use_dst and isinstance(model, SPARSE_MODEL_TYPES):
             spk_counts, acts = model(x_seq, return_activations=True)
             update_hebb_buffer(x_seq, acts)
         else:
@@ -287,7 +303,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch_idx, use_dst):
         loss = nn.CrossEntropyLoss()(spk_counts, labels)
         loss.backward()
         optimizer.step()
-        if use_dst and isinstance(model, MixerSNN):
+        if use_dst and isinstance(model, SPARSE_MODEL_TYPES):
             if global_step > 0 and global_step % UPDATE_INTERVAL == 0:
                 dst_step(model)
         global_step += 1

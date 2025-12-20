@@ -134,6 +134,7 @@ class IndexSNN(nn.Module):
         x_seq,
         return_hidden_spikes: bool = False,
         return_time_series: bool = False,
+        return_activations: bool = False,
     ):
         # x_seq: [T, B, input_dim]
         T_steps, B, _ = x_seq.shape
@@ -154,11 +155,19 @@ class IndexSNN(nn.Module):
             spk2_sum = torch.zeros(B, self.fc2.out_features, device=device)
             spk3_sum = torch.zeros(B, self.fc3.out_features, device=device)
 
-        # Optional: full time series of hidden spikes [T, B, H]
+        # Full time series of hidden spikes [T, B, H]
         if return_time_series:
             spk1_ts = torch.zeros(T_steps, B, self.fc1.out_features, device=device)
             spk2_ts = torch.zeros(T_steps, B, self.fc2.out_features, device=device)
             spk3_ts = torch.zeros(T_steps, B, self.fc3.out_features, device=device)
+
+        # Per-timestep activations for DST
+        if return_activations:
+            activations = {
+                "layer1": [],
+                "layer2": [],
+                "layer3": [],
+            }
 
         for t in range(T_steps):
             x_t = x_seq[t]  # [B, input_dim]
@@ -191,6 +200,15 @@ class IndexSNN(nn.Module):
                 spk2_ts[t] = spk2
                 spk3_ts[t] = spk3
 
+            if return_activations:
+                activations["layer1"].append(spk1.detach().cpu())
+                activations["layer2"].append(spk2.detach().cpu())
+                activations["layer3"].append(spk3.detach().cpu())
+
+        if return_activations:
+            for k in activations:
+                activations[k] = torch.stack(activations[k], dim=0)
+
         # 1) time-series mode
         if return_time_series:
             hidden_time = {
@@ -207,6 +225,11 @@ class IndexSNN(nn.Module):
                 "layer2": spk2_sum,
                 "layer3": spk3_sum,
             }
+            if return_activations:
+                return spk_out_sum, hidden_spikes, activations
             return spk_out_sum, hidden_spikes
+
+        if return_activations:
+            return spk_out_sum, activations
 
         return spk_out_sum
