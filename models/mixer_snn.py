@@ -6,7 +6,6 @@ import snntorch as snn
 from snntorch import surrogate
 
 
-# Linear layer with mixer-style sparse connectivity
 class MixerSparseLinear(nn.Module):
     def __init__(
         self,
@@ -20,7 +19,6 @@ class MixerSparseLinear(nn.Module):
     ):
         super().__init__()
 
-        # Each layer must split evenly into groups
         if in_features % num_groups != 0 or out_features % num_groups != 0:
             raise ValueError(
                 f"in_features ({in_features}) and out_features ({out_features}) "
@@ -34,7 +32,6 @@ class MixerSparseLinear(nn.Module):
         self.p_inter = float(p_inter)
         self.interleaved = bool(interleaved)
 
-        # Dense weight matrix; sparsity is enforced via a fixed binary mask
         self.weight = nn.Parameter(torch.empty(out_features, in_features))
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features))
@@ -42,43 +39,32 @@ class MixerSparseLinear(nn.Module):
             self.bias = None
 
         mask = self._build_mask()
-        # Non-trainable mask that follows the module to any device
         self.register_buffer("mask", mask)
-
         self.reset_parameters()
 
     def _build_mask(self) -> torch.Tensor:
-        """Create a binary mask based on mixer-style grouping."""
         in_group_size = self.in_features // self.num_groups
         out_group_size = self.out_features // self.num_groups
 
-        # Base contiguous groups
-        base_in_group = torch.arange(self.in_features) // in_group_size      # [in_features]
-        base_out_group = torch.arange(self.out_features) // out_group_size   # [out_features]
+        base_in_group = torch.arange(self.in_features) // in_group_size
+        base_out_group = torch.arange(self.out_features) // out_group_size
 
         if not self.interleaved:
-            # Contiguous index-based groups
             in_group = base_in_group
             out_group = base_out_group
         else:
-            # Interleaved groups: group id is index % num_groups
             in_group = torch.arange(self.in_features) % self.num_groups
             out_group = torch.arange(self.out_features) % self.num_groups
 
-        # same_group[o, i] is True if input i and output o are in the same group
-        same_group = (out_group[:, None] == in_group[None, :])  # [out_features, in_features]
+        same_group = (out_group[:, None] == in_group[None, :])
 
-        # Start with low inter-group probability everywhere
         probs = torch.full((self.out_features, self.in_features), self.p_inter)
-        # Overwrite same-group entries with the higher intra-group probability
         probs[same_group] = self.p_intra
 
-        # Sample the binary mask
         mask = torch.bernoulli(probs)
         return mask
 
     def reset_parameters(self) -> None:
-        """Kaiming init, then rescale active weights according to fan-in."""
         nn.init.kaiming_uniform_(self.weight, a=5**0.5)
 
         with torch.no_grad():
@@ -98,10 +84,6 @@ class MixerSparseLinear(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        """
-        input:  [batch_size, in_features]
-        output: [batch_size, out_features]
-        """
         effective_weight = self.weight * self.mask
         return F.linear(input, effective_weight, self.bias)
 
@@ -118,90 +100,61 @@ class MixerSNN(nn.Module):
     ):
         super().__init__()
 
-        # First layer: contiguous groups
-        self.fc1 = MixerSparseLinear(
-            in_features=input_dim,
-            out_features=hidden_dim,
-            num_groups=num_groups,
-            p_intra=p_intra,
-            p_inter=p_inter,
-            interleaved=False,
-        )
-        # Second layer: interleaved groups (mixing)
-        self.fc2 = MixerSparseLinear(
-            in_features=hidden_dim,
-            out_features=hidden_dim,
-            num_groups=num_groups,
-            p_intra=p_intra,
-            p_inter=p_inter,
-            interleaved=True,
-        )
-        # Third layer: back to contiguous groups
-        self.fc3 = MixerSparseLinear(
-            in_features=hidden_dim,
-            out_features=hidden_dim,
-            num_groups=num_groups,
-            p_intra=p_intra,
-            p_inter=p_inter,
-            interleaved=False,
-        )
+        self.fc1 = MixerSparseLinear(input_dim, hidden_dim, num_groups, p_intra, p_inter, interleaved=False)
+        self.fc2 = MixerSparseLinear(hidden_dim, hidden_dim, num_groups, p_intra, p_inter, interleaved=True)
+        self.fc3 = MixerSparseLinear(hidden_dim, hidden_dim, num_groups, p_intra, p_inter, interleaved=False)
         self.fc_out = nn.Linear(hidden_dim, num_classes)
 
-        # LIF neuron parameters
-        beta = 0.95
-        spike_grad = surrogate.fast_sigmoid(slope=25)
+        beta = 0.9
+        threshold = 1.0
+        spike_grad = surrogate.atan()
 
-        # Spiking (LIF) layers
-        self.lif1 = snn.Leaky(beta=beta, spike_grad=spike_grad)
-        self.lif2 = snn.Leaky(beta=beta, spike_grad=spike_grad)
-        self.lif3 = snn.Leaky(beta=beta, spike_grad=spike_grad)
-        self.lif_out = snn.Leaky(beta=beta, spike_grad=spike_grad)
+        self.lif1 = snn.Leaky(beta=beta, spike_grad=spike_grad, init_hidden=True,
+                             learn_beta=True, learn_threshold=True, threshold=threshold)
+        self.lif2 = snn.Leaky(beta=beta, spike_grad=spike_grad, init_hidden=True,
+                             learn_beta=True, learn_threshold=True, threshold=threshold)
+        self.lif3 = snn.Leaky(beta=beta, spike_grad=spike_grad, init_hidden=True,
+                             learn_beta=True, learn_threshold=True, threshold=threshold)
+        self.lif_out = snn.Leaky(beta=beta, spike_grad=spike_grad, init_hidden=True,
+                                learn_beta=True, learn_threshold=True, threshold=threshold)
 
-    def forward(self, x_seq, return_hidden_spikes: bool = False, return_activations: bool = False):
-        """
-        x_seq: [T, B, input_dim]
-        Returns spike counts over time; optionally returns hidden spike sums
-        and per-timestep activations.
-        """
+    def forward(self, x_seq, return_hidden_spikes: bool = False, 
+                return_spk_rec: bool = False, return_activations: bool = False):
         T_steps, B, _ = x_seq.shape
 
-        # Membrane potentials per layer
-        mem1 = torch.zeros(B, self.fc1.out_features, device=x_seq.device)
-        mem2 = torch.zeros(B, self.fc2.out_features, device=x_seq.device)
-        mem3 = torch.zeros(B, self.fc3.out_features, device=x_seq.device)
-        mem_out = torch.zeros(B, self.fc_out.out_features, device=x_seq.device)
+        self.lif1.reset_mem()
+        self.lif2.reset_mem()
+        self.lif3.reset_mem()
+        self.lif_out.reset_mem()
 
-        # Output spike count
+        spk_out_rec = [] if return_spk_rec else None
         spk_out_sum = torch.zeros(B, self.fc_out.out_features, device=x_seq.device)
 
-        # Hidden spike sums (for firing rate stats)
         if return_hidden_spikes:
             spk1_sum = torch.zeros(B, self.fc1.out_features, device=x_seq.device)
             spk2_sum = torch.zeros(B, self.fc2.out_features, device=x_seq.device)
             spk3_sum = torch.zeros(B, self.fc3.out_features, device=x_seq.device)
 
-        # Optional per-timestep activations buffer
         if return_activations:
-            activations = {
-                "layer1": [],
-                "layer2": [],
-                "layer3": [],
-            }
+            activations = {"layer1": [], "layer2": [], "layer3": []}
 
         for t in range(T_steps):
             x_t = x_seq[t]
 
             cur1 = self.fc1(x_t)
-            spk1, mem1 = self.lif1(cur1, mem1)
+            spk1 = self.lif1(cur1)
 
             cur2 = self.fc2(spk1)
-            spk2, mem2 = self.lif2(cur2, mem2)
+            spk2 = self.lif2(cur2)
 
             cur3 = self.fc3(spk2)
-            spk3, mem3 = self.lif3(cur3, mem3)
+            spk3 = self.lif3(cur3)
 
             cur_out = self.fc_out(spk3)
-            spk_out, mem_out = self.lif_out(cur_out, mem_out)
+            spk_out = self.lif_out(cur_out)
+
+            if return_spk_rec:
+                spk_out_rec.append(spk_out)
 
             spk_out_sum += spk_out
 
@@ -211,25 +164,39 @@ class MixerSNN(nn.Module):
                 spk3_sum += spk3
 
             if return_activations:
-                # Keep a CPU copy to avoid holding graph and GPU memory
-                activations["layer1"].append(spk1.detach().cpu())
-                activations["layer2"].append(spk2.detach().cpu())
-                activations["layer3"].append(spk3.detach().cpu())
+                activations["layer1"].append(spk1.detach())
+                activations["layer2"].append(spk2.detach())
+                activations["layer3"].append(spk3.detach())
+
+        if return_spk_rec:
+            spk_out_rec = torch.stack(spk_out_rec, dim=0)
 
         if return_activations:
-            # [T, B, H] per hidden layer
             for k in activations:
-                activations[k] = torch.stack(activations[k], dim=0)
+                activations[k] = torch.stack(activations[k], dim=0).cpu()
+
+        hidden_spikes = None
+        if return_hidden_spikes:
+            hidden_spikes = {"layer1": spk1_sum, "layer2": spk2_sum, "layer3": spk3_sum}
+
+        # Unified returns
+        if return_spk_rec and return_hidden_spikes and return_activations:
+            return spk_out_rec, spk_out_sum, hidden_spikes, activations
+
+        if return_spk_rec and return_hidden_spikes:
+            return spk_out_rec, spk_out_sum, hidden_spikes
+
+        if return_spk_rec and return_activations:
+            return spk_out_rec, spk_out_sum, activations
+
+        if return_hidden_spikes and return_activations:
+            return spk_out_sum, hidden_spikes, activations
 
         if return_hidden_spikes:
-            hidden_spikes = {
-                "layer1": spk1_sum,
-                "layer2": spk2_sum,
-                "layer3": spk3_sum,
-            }
-            if return_activations:
-                return spk_out_sum, hidden_spikes, activations
             return spk_out_sum, hidden_spikes
+
+        if return_spk_rec:
+            return spk_out_rec, spk_out_sum
 
         if return_activations:
             return spk_out_sum, activations
